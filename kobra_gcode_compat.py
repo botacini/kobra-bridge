@@ -143,6 +143,7 @@ def inspect_gcode(path: str | os.PathLike) -> GCodeFacts:
     mins = {"X": math.inf, "Y": math.inf, "Z": math.inf}
     maxs = {"X": -math.inf, "Y": -math.inf, "Z": -math.inf}
     body = False
+    purge_region = False
     end = False
     ambiguous = False
     plane = "G17"
@@ -179,11 +180,17 @@ def inspect_gcode(path: str | os.PathLike) -> GCodeFacts:
                     settings[sm.group(1)] = sm.group(2)
                 elif line == "; filament start gcode":
                     has_start = True
+                    body = True
                 elif line == "; filament end gcode":
                     has_end = True
                     end = True
+                elif line.lstrip("; ") == "PURGE LINE":
+                    purge_region = True
                 elif _AFTER_FIRST_LAYER.match(line):
                     body = True
+                    purge_region = False
+                continue
+            if purge_region:
                 continue
             if body and not end:
                 fast = _XYZ_FAST.match(line)
@@ -340,8 +347,8 @@ def check_compatibility(facts: GCodeFacts, target: KobraModel,
         reasons.append(f"file uses {used_tools} tools but target has {available_ace_slots} available slots")
     if facts.source_model_id != target.model_id and any(t > 0 for t in facts.tool_indices):
         reasons.append("cross-model multicolour tool-change choreography is not safely convertible")
-    if facts.unsupported_commands:
-        reasons.append("unsupported command(s): " + ", ".join(facts.unsupported_commands))
+    if facts.source_model_id != target.model_id and facts.unsupported_commands:
+        reasons.append("unsupported cross-model command(s): " + ", ".join(facts.unsupported_commands))
     if facts.max_feed_mm_s > target.max_xy_speed_mm_s:
         warnings.append(f"motion speed will be clamped to {target.max_xy_speed_mm_s} mm/s")
     if facts.max_accel_mm_s2 > target.max_xy_accel_mm_s2:

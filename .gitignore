@@ -19,4 +19,5 @@ __pycache__/
 venv/
 build/
 dist/
+graphify-out/
 *.bak*

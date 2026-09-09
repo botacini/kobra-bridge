@@ -3513,6 +3513,87 @@ class KobraXBridge:
         files = [r for r in records if not r.get("is_dir")]
         return self._json_cors({"result": files})
 
+    async def handle_kx_printer_file_start(self, request):
+        """Start an existing root-level printer file without uploading it again."""
+        try:
+            body = await request.json()
+        except Exception:
+            return self._json_cors({"error": "invalid json"}, status=400)
+        filename = str(body.get("filename") or "").strip()
+        if (not filename or filename != os.path.basename(filename)
+                or "/" in filename or "\\" in filename
+                or not filename.lower().endswith((".gcode", ".bgcode"))):
+            return self._json_cors({"error": "invalid printer filename"}, status=400)
+        if self._state.get("print_state") in (
+                "printing", "paused", "preheating", "auto_leveling", "checking", "init"):
+            return self._json_cors({"error": "printer is already busy"}, status=409)
+
+        pending_token = self._set_print_pending(filename)
+        if not pending_token:
+            return self._json_cors({"error": "another print is already starting"}, status=409)
+        loop = asyncio.get_event_loop()
+        try:
+            listing = await loop.run_in_executor(None, lambda: self._wait_for_file_action(
+                "listLocal",
+                lambda: self.client.publish(
+                    "file", "listLocal",
+                    {"page_num": 1, "page_size": 200, "path": "/"},
+                    timeout=0,
+                ),
+                timeout=8.0,
+            ))
+            records = (listing.get("data") or {}).get("records") if listing else None
+            if not isinstance(records, list):
+                raise RuntimeError("printer file list timed out; retry")
+            if not any(r.get("filename") == filename and not r.get("is_dir") for r in records):
+                self._clear_print_pending(pending_token)
+                return self._json_cors({"error": "file not found on printer"}, status=404)
+
+            assignments = body.get("filament_assignments")
+            if assignments:
+                ams_box_mapping, _, invalid_count = self._build_assigned_ams_box_mapping(assignments)
+                if invalid_count and not ams_box_mapping:
+                    self._clear_print_pending(pending_token)
+                    return self._json_cors({"error": "no usable filament assignments for current filament mode"}, status=400)
+            else:
+                ams_box_mapping = self._build_auto_ams_box_mapping()
+            payload = {
+                "filename": filename,
+                "filepath": "/",
+                "taskid": str(uuid.uuid4().int % 1000000),
+                "task_mode": 1,
+                "filetype": 1,
+                "ams_settings": {
+                    "use_ams": bool(ams_box_mapping),
+                    "ams_box_mapping": ams_box_mapping,
+                },
+                "task_settings": {
+                    # Printer-local starts default off: this S1 Max's native
+                    # LeviQ3 path wedged after a 75 C config / 65 C model mismatch.
+                    "auto_leveling": 1 if body.get("auto_leveling") in (1, True) else 0,
+                    "vibration_compensation": 1 if body.get("vibration_compensation") in (1, True) else 0,
+                    "flow_calibration": 1 if body.get("flow_calibration") in (1, True) else 0,
+                },
+            }
+            result = await loop.run_in_executor(
+                None, lambda: self.client.publish("print", "start", payload, timeout=15.0))
+        except Exception as e:
+            self._clear_print_pending(pending_token)
+            log.error(f"Printer-local start failed for {filename}: {e}")
+            return self._json_cors({"error": str(e)}, status=502)
+        if result is None:
+            self._clear_print_pending(pending_token)
+            return self._json_cors({"error": "no response from printer"}, status=504)
+        try:
+            bad_code = result.get("code") is not None and int(result.get("code")) != 200
+        except (TypeError, ValueError):
+            bad_code = True
+        if result.get("state") == "failed" or bad_code:
+            self._clear_print_pending(pending_token)
+            return self._json_cors({"error": result.get("msg") or result.get("message") or "printer rejected print start"}, status=502)
+        log.info(f"Printer-local print start: {filename} auto_leveling={payload['task_settings']['auto_leveling']}")
+        return self._json_cors({"result": "ok", "filename": filename})
+
     async def handle_kx_printer_file_delete(self, request):
         """POST /kx/printer-files/delete - body: {"filenames": ["a.gcode", ...]}.
         Single endpoint for both single and multi-select delete - the
@@ -4487,7 +4568,8 @@ class KobraXBridge:
             # No dialog -> all occupied slots as with a normal upload print
             ams_box_mapping = self._build_auto_ams_box_mapping()
 
-        auto_leveling = int(body.get("auto_leveling", getattr(self._args, "auto_leveling", 1)))
+        default_auto_leveling = 0 if self._model and self._model.model_id == "20029" else getattr(self._args, "auto_leveling", 1)
+        auto_leveling = int(body.get("auto_leveling", default_auto_leveling))
         filename = gcode_file["filename"]
 
         if self._state.get("print_state") in (
@@ -7052,6 +7134,7 @@ def build_app(bridge: KobraXBridge) -> web.Application:
     r.add_get("/kx/files/{file_id}/thumbnail", bridge.handle_kx_file_thumbnail)
     r.add_post("/kx/files/{file_id}/verify", bridge.handle_kx_file_verify)
     r.add_get("/kx/printer-files",         bridge.handle_kx_printer_files)
+    r.add_post("/kx/printer-files/start",  bridge.handle_kx_printer_file_start)
     r.add_post("/kx/printer-files/delete", bridge.handle_kx_printer_file_delete)
     r.add_get("/kx/printer-files/{filename}/thumbnail", bridge.handle_kx_printer_file_thumbnail)
     r.add_get("/kx/filament/slots",        bridge.handle_kx_filament_slots)

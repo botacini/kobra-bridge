@@ -12,11 +12,13 @@ $PYTHON test_fork_update_safety.py
 $PYTHON test_cors_policy.py
 $PYTHON test_control_input_bounds.py
 $PYTHON test_print_route_compatibility.py
+$PYTHON test_print_pending.py
 $PYTHON test_mqtt_framing.py
 $PYTHON test_mqtt_ack_correlation.py
 $PYTHON test_upload_progress.py
 $PYTHON test_log_redaction.py
 $NODE test_farm_model_compat.js
+$NODE test_file_browser_safety.js
 $NODE test_flow_farm_ui.js
 $NODE test_farm_dispatch_safety.js
 $NODE test_farm_status_persistence.js

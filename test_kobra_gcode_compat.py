@@ -104,8 +104,9 @@ arc_f=inspect(arc);arc_r=m.check_compatibility(arc_f,s1,.4,4)
 assert arc_r.decision=='blocked' and arc_f.bounds_max[0]>=510, (arc_f.bounds_max,arc_r)
 # Unsupported R-form arcs fail closed rather than trusting incomplete bounds.
 r_arc=fixture().replace(b'G1 X159 Y154 E1',b'G2 X159 Y154 R500 E1')
-r_report=m.check_compatibility(inspect(r_arc),s1,.4,4)
+r_f=inspect(r_arc);r_report=m.check_compatibility(r_f,s1,.4,4)
 assert r_report.decision=='blocked' and 'unsupported' in ' '.join(r_report.reasons),r_report
+assert m.check_compatibility(r_f,x,.4,4).decision=='native','unsupported cross-model forms must not block a native file'
 # Safe I/J arcs remain convertible and their feedrate is clamped for the target.
 safe_arc=fixture().replace(b'G1 X159 Y154 E1',b'G2 X20 Y20 I5 J5 E1 F60000')
 with tempfile.TemporaryDirectory() as d:

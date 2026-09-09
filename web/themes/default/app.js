@@ -3606,7 +3606,7 @@ function renderPrinterFiles(){
         '<div class="kxfile-meta"><span>'+sizeKb+'</span><span>'+date+'</span></div>'+
         '<div class="kxfile-actions">'+
           '<div class="row2" style="grid-template-columns:1fr 44px">'+
-            '<button disabled style="opacity:.55;cursor:default">'+(T.kx_printer_storage||'Printer storage')+'</button>'+
+            '<button class="go" onclick="event.stopPropagation();printerFilePrint(\''+jsName+'\',this)">'+(T.store_print||'Print')+'</button>'+
             '<button class="del" title="'+_kxEsc(T.store_delete||'Delete')+'" aria-label="'+_kxEsc(T.store_delete||'Delete')+'"'+
               ' onclick="event.stopPropagation();printerFileDelete(\''+jsName+'\')">🗑</button>'+
           '</div>'+
@@ -3694,6 +3694,18 @@ function printerFileExitSelectMode(){
   var bar=document.getElementById('printer-store-select-bar');
   if(bar)bar.style.display='none';
   renderPrinterFiles();
+}
+
+function printerFilePrint(filename,btn){
+  if(!confirm('Start "'+filename+'" on '+((_activePrinter&&_activePrinter.name)||'this printer')+'?'))return;
+  var label=btn?btn.textContent:'';
+  if(btn){btn.disabled=true;btn.textContent='…';}
+  fetch(_apiUrl('/kx/printer-files/start'),{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({filename:filename,auto_leveling:0})
+  }).then(function(r){return r.json().then(function(d){if(!r.ok||d.error)throw new Error(d.error||('HTTP '+r.status));return d;});})
+    .then(function(){clog('Print started: '+filename,'msg-ok');showPanel('dashboard');})
+    .catch(function(e){clog('Print error: '+e.message,'msg-err');if(btn){btn.disabled=false;btn.textContent=label;}});
 }
 
 function _printerFilesDeleteRequest(filenames){
@@ -4199,9 +4211,9 @@ function openFilamentDialog(slots){
   var title=document.getElementById('fd-title');
   var body=document.getElementById('fd-slots');
   if(title)title.textContent=_storeFilename;
-  // Auto-Leveling-Checkbox mit globalem Default vorbelegen
+  // S1 Max native LeviQ3 can wedge on conflicting bed metadata; default off.
   var fdAl=document.getElementById('fd-auto-leveling');
-  if(fdAl) fdAl.checked=(S.auto_leveling===undefined?true:!!S.auto_leveling);
+  if(fdAl) fdAl.checked=String(S.model_id)==='20029'?false:(S.auto_leveling===undefined?true:!!S.auto_leveling);
   // Objekt-Liste laden — sobald eine File-ID auflösbar ist (Issue #57 Punkt 3:
   // Skip-Parität auch im Banner-/Upload-Modus, nicht nur im Store-Modus).
   // startReadyFileWithSlots() setzt _storeFileId auch im Banner-Modus per
