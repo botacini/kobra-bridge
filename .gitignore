@@ -1,0 +1,22 @@
+# Runtime state and credentials
+.env
+config/config.ini
+certs/*
+!certs/.gitkeep
+data/
+*.db
+*.db-wal
+*.db-shm
+*.gcode
+*.3mf
+*.log
+
+# Local/generated
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.bak*

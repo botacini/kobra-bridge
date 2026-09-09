@@ -1,0 +1,65 @@
+# Kobra Bridge configuration. Copy to config/config.ini.
+# The web UI can add a printer from its IP and discover these fields.
+
+[connection]
+printer_ip =
+mqtt_port = 9883
+username =
+password =
+device_id =
+mode_id =
+model_id =
+
+[print]
+default_ams_slot = auto
+auto_leveling = 1
+vibration_compensation = 0
+camera_on_print = 0
+web_upload_warning = 1
+print_start_dialog = 1
+
+[bridge]
+poll_interval = 3
+verbose_http_log = 0
+
+# Supported model IDs:
+#   20030 = Anycubic Kobra X
+#   20025 = Anycubic Kobra S1
+#   20029 = Anycubic Kobra S1 Max
+#
+# Multi-printer example:
+# [printer_1]
+# name = Kobra X
+# printer_ip = 192.168.1.20
+# mqtt_port = 9883
+# username =
+# password =
+# device_id =
+# mode_id = 20030
+# model_id = 20030
+# http_port = 7125
+#
+# [printer_2]
+# name = Kobra S1 Max
+# printer_ip = 192.168.1.21
+# mqtt_port = 9883
+# username =
+# password =
+# device_id =
+# mode_id = 20029
+# model_id = 20029
+# http_port = 7126
+
+[ace_dry_presets]
+pla_temp = 45
+pla_duration_sec = 14400
+petg_temp = 50
+petg_duration_sec = 14400
+abs_asa_temp = 45
+abs_asa_duration_sec = 28800
+pa_pc_temp = 55
+pa_pc_duration_sec = 43200
+
+[spoolman]
+server =
+sync_rate = 0
