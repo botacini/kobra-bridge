@@ -17,6 +17,7 @@ const sb={storeFiles:[],_farmLastStates:{printers:[]},_farmStateCache:{},_farmSe
   parseInt,String,Number,Object,Array,JSON,Math,Date,console,localStorage:{getItem:()=>null},setTimeout:()=>0};
 sb.window=sb;vm.createContext(sb);vm.runInContext(block,sb);
 assert(typeof sb._flowCompat==='function','app.js must expose _flowCompat(p,f)');
+assert(typeof sb._flowCompatProgress==='object','app.js must keep compatibility scan progress');
 const slot=[{slot_index:0,material:'PLA',color_hex:'#fff',status:'loaded'}];
 const f={id:'f1',filename:'x.gcode',gcode_filaments:[{material:'PLA',color_hex:'#fff',is_used:true}]};
 sb.storeFiles=[f];
@@ -24,6 +25,8 @@ sb._farmLastStates={printers:[
   {id:'1',name:'Kobra X 1',kobra_state:'free',slots:slot,model_id:'20030'},
   {id:'7',name:'S1 Max',kobra_state:'free',slots:slot,model_id:'20029'},
   {id:'8',name:'S1',kobra_state:'free',slots:slot,model_id:'20025'}]};
+sb._flowCompatProgress={f1:{active:true,phase:'scanning',percent:63,processed_bytes:63000000,size_bytes:100000000}};
+assert(/63%/.test(sb._flowCompatText(sb._farmLastStates.printers[0],f))&&/scanning/i.test(sb._flowCompatText(sb._farmLastStates.printers[0],f)),'real scan progress must be visible');
 sb._flowCompatCache={f1:{'1':{decision:'native'},'7':{decision:'convertible',warnings:['motion speed will be clamped to 600 mm/s']},'8':{decision:'blocked',reasons:['toolpath exceeds target build volume (250, 250, 250)']}}};
 assert(sb._flowCompat(sb._farmLastStates.printers[0],f).decision==='native');
 sb.maybeGateWebUpload=(x,cb)=>cb();

@@ -133,9 +133,11 @@ def _arc_contains(angle: float, start: float, end: float, clockwise: bool,
     return offset <= sweep + 1e-9
 
 
-def inspect_gcode(path: str | os.PathLike) -> GCodeFacts:
-    """Inspect a G-code file in one streaming pass without loading it into RAM."""
+def inspect_gcode(path: str | os.PathLike, progress_cb=None) -> GCodeFacts:
+    """Inspect G-code without loading it into RAM; report real two-pass progress."""
     path = str(path)
+    size = os.path.getsize(path)
+    total_work = max(1, size * 2)
     settings: dict[str, str] = {}
     digest = hashlib.sha256()
     absolute = True
@@ -152,10 +154,16 @@ def inspect_gcode(path: str | os.PathLike) -> GCodeFacts:
     tools: set[int] = set()
     max_feed = max_accel = max_nozzle = max_bed = max_chamber = 0.0
     has_start = has_end = False
+    done = 0
+    if progress_cb:
+        progress_cb(0, total_work, "hashing")
 
     with open(path, "rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             digest.update(chunk)
+            done += len(chunk)
+            if progress_cb:
+                progress_cb(done, total_work, "hashing")
 
     def track(axis: str, value: float) -> None:
         nonlocal ambiguous
@@ -169,9 +177,17 @@ def inspect_gcode(path: str | os.PathLike) -> GCodeFacts:
         if pos[axis] < mins[axis]: mins[axis] = pos[axis]
         if pos[axis] > maxs[axis]: maxs[axis] = pos[axis]
 
-    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+    scanned = 0
+    next_report = 0
+    if progress_cb:
+        progress_cb(size, total_work, "scanning")
+    with open(path, "rb") as fh:
         for raw in fh:
-            line = raw.strip()
+            scanned += len(raw)
+            if progress_cb and scanned >= next_report:
+                progress_cb(min(total_work, size + scanned), total_work, "scanning")
+                next_report = scanned + (1 << 20)
+            line = raw.decode("utf-8", "replace").strip()
             if not line:
                 continue
             if line[0] == ";":
@@ -306,6 +322,8 @@ def inspect_gcode(path: str | os.PathLike) -> GCodeFacts:
         maxs["Z"] = max(maxs["Z"], header_z)
     bound_min = tuple(0.0 if math.isinf(mins[a]) else mins[a] for a in "XYZ")
     bound_max = tuple(0.0 if math.isinf(-maxs[a]) else maxs[a] for a in "XYZ")
+    if progress_cb:
+        progress_cb(total_work, total_work, "scanning")
     return GCodeFacts(
         path=path, sha256=digest.hexdigest(), source_model_id=source.model_id if source else "",
         source_model_name=source.name if source else settings.get("printer_model", ""),

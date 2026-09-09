@@ -23,10 +23,8 @@ const p1=src.indexOf('\nfunction _printerFilesDeleteRequest(',p0);
 const localStart=src.slice(p0,p1);
 assert(localStart.includes("'/kx/printer-files/start'"),
   'printer-local Print does not use the dedicated endpoint');
-assert(localStart.includes('auto_leveling:0'),
-  'printer-local Print must default auto-leveling off');
-assert(src.includes("String(S.model_id)==='20029'?false"),
-  'S1 Max print dialog must default auto-leveling off');
+assert(localStart.includes('auto_leveling:1'),
+  'printer-local Print must request the normal bed-leveling workflow');
 
 // Both single and bulk delete route through this helper, so one eviction covers both.
 const d0=src.indexOf('function _printerFilesDeleteRequest(');

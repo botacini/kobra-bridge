@@ -122,25 +122,27 @@ b=Fake(RuntimeError("mqtt down"));status,data=run(b)
 assert status==502 and not b._pending_active() and b.store_calls==0
 b=Fake({"code":200,"state":"done"});status,data=run(b)
 assert status==200 and data["result"]=="ok" and b._pending_active()=="a.gcode" and b.store_calls==1, (status,data,b._pending_active(),b.store_calls)
-# S1 Max bridge-store starts are also fail-safe off unless the caller explicitly opts in.
+# S1 Max bridge-store starts honor the configured default after the persisted
+# LeviQ3 temperature is repaired; callers can still explicitly disable it.
 b=Fake({"code":200,"state":"done"});b._model=model_for_id("20029");b._args.model_id="20029";status,data=run(b)
-assert status==200 and b.built_auto==0
-b=Fake({"code":200,"state":"done"});b._model=model_for_id("20029");b._args.model_id="20029";status,data=asyncio.run(b.handle_kx_print(Req({"file_id":"f1","auto_leveling":1})))
 assert status==200 and b.built_auto==1
+b=Fake({"code":200,"state":"done"});b._model=model_for_id("20029");b._args.model_id="20029";status,data=asyncio.run(b.handle_kx_print(Req({"file_id":"f1","auto_leveling":0})))
+assert status==200 and b.built_auto==0
 
 # _serve_url fails before ownership is set: structured error, no stuck pending.
 b=Fake();b._serve_url=lambda p:(_ for _ in ()).throw(RuntimeError("bad BRIDGE_HOST_IP"))
 status,data=run(b);assert status==500 and not b._pending_active() and b.ensure_calls==0
 
-# Printer-local starts use the printer's own file identity: no bridge copy, URL,
-# or upload, and auto-leveling is fail-safe off unless explicitly requested.
+# Printer-local starts use the printer's own file identity and .acm mapping:
+# no bridge copy/upload, with normal auto-leveling unless explicitly disabled.
 def run_local(b,body):return asyncio.run(b.handle_kx_printer_file_start(Req(body)))
 b=Fake({"code":200,"state":"done"});status,data=run_local(b,{"filename":"local.gcode"})
 assert status==200 and data["result"]=="ok" and b.ensure_calls==0 and b._pending_active()=="local.gcode"
 assert b.last_publish[0:2]==("print","start")
 payload=b.last_publish[2]
 assert payload["filename"]=="local.gcode" and payload["filepath"]=="/" and payload["task_mode"]==1
-assert payload["task_settings"]["auto_leveling"]==0 and "url" not in payload
+assert payload["task_settings"]["auto_leveling"]==1 and "url" not in payload
+assert "ams_settings" not in payload, "existing printer-side .acm mapping must remain authoritative"
 b=Fake({"code":200,"state":"done"});status,data=run_local(b,{"filename":"../bad.gcode"})
 assert status==400 and not b._pending_active()
 b=Fake({"code":200,"state":"done"});status,data=run_local(b,{"filename":"local.gcode","auto_leveling":1})

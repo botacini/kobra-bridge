@@ -12,6 +12,7 @@ $PYTHON test_fork_update_safety.py
 $PYTHON test_cors_policy.py
 $PYTHON test_control_input_bounds.py
 $PYTHON test_print_route_compatibility.py
+$PYTHON test_route_contract.py
 $PYTHON test_print_pending.py
 $PYTHON test_mqtt_framing.py
 $PYTHON test_mqtt_ack_correlation.py

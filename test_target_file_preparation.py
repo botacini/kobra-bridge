@@ -33,12 +33,23 @@ with tempfile.TemporaryDirectory() as d:
  finally:ns['derive_gcode']=orig
  assert calls[0]==1,calls
  sizes={os.path.getsize(o[0]['path']) for o in outs};assert len(sizes)==1 and outs[0][0]['size_bytes']==sizes.pop()
- # Compatibility requests from every printer share one streaming source scan.
- scans=[0];orig_inspect=inspect_gcode
- def counting_inspect(*a,**k):scans[0]+=1;time.sleep(0.05);return orig_inspect(*a,**k)
+ # Compatibility requests from every printer share one streaming source scan,
+ # while a separate status request sees the active pass and real percentage.
+ scans=[0];orig_inspect=inspect_gcode;started=threading.Event();release=threading.Event()
+ def counting_inspect(path,progress_cb=None):
+  scans[0]+=1
+  if progress_cb:progress_cb(1,4,'hashing')
+  started.set();release.wait(2)
+  return orig_inspect(path,progress_cb)
  store3=Store(d);ns['inspect_gcode']=counting_inspect
  try:
-  with concurrent.futures.ThreadPoolExecutor(6) as ex:list(ex.map(lambda _:store3.gcode_facts(row),range(6)))
- finally:ns['inspect_gcode']=orig_inspect
+  with concurrent.futures.ThreadPoolExecutor(6) as ex:
+   futures=[ex.submit(store3.gcode_facts,row) for _ in range(6)]
+   assert started.wait(1)
+   progress=store3.gcode_facts_progress(row)
+   assert progress['active'] and progress['phase']=='hashing' and progress['percent']==25,progress
+   release.set();[f.result() for f in futures]
+ finally:ns['inspect_gcode']=orig_inspect;release.set()
  assert scans[0]==1,scans
+ assert store3.gcode_facts_progress(row)['percent']==100
 print('target file preparation: all checks passed')

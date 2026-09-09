@@ -87,6 +87,13 @@ def inspect(data):
 x=models.model_for_id('20030');s1=models.model_for_id('20025');smax=models.model_for_id('20029')
 f=inspect(fixture())
 assert f.source_model_id=='20030' and f.nozzle_mm==.4
+# Progress represents the two real file passes: hash 0-50%, scan 50-100%.
+with tempfile.NamedTemporaryFile(suffix='.gcode') as pf:
+ pf.write(fixture());pf.flush();progress=[]
+ m.inspect_gcode(pf.name,lambda done,total,stage:progress.append((done,total,stage)))
+ assert progress and progress[-1][0]==progress[-1][1] and progress[-1][2]=='scanning',progress[-3:]
+ assert any(stage=='hashing' for _,_,stage in progress) and any(stage=='scanning' for _,_,stage in progress)
+ assert all(a[0]<=b[0] and a[1]==b[1] for a,b in zip(progress,progress[1:])),progress
 assert f.bounds_min==(10.,10.,0.) and f.bounds_max==(159.,154.,27.),(f.bounds_min,f.bounds_max)
 assert (f.max_nozzle_c,f.max_bed_c,f.max_chamber_c)==(220,60,0)
 for target in (x,s1,smax):

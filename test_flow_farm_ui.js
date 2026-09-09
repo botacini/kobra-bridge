@@ -22,7 +22,7 @@ const sb={
   maybeGateWebUpload:(f,cb)=>cb(),_setGcodeFilamentsFromFileObj(f){sb._gcodeFilaments=f.gcode_filaments||[];},
   clog:(m,c)=>logs.push({m,c}),kxTransferStart(){},kxTransferEnd(){},refreshFarmState(){},
   confirm:()=>confirmed,setTimeout:(fn)=>{},CSS:{escape:s=>s},
-  fetch:(url,o)=>{if(url.endsWith('/compatibility'))return Promise.resolve({ok:true,json:()=>Promise.resolve({result:{decision:'native'}})});posted.push({url,body:o&&o.body?JSON.parse(o.body):null});return Promise.resolve({ok:true,json:()=>Promise.resolve({result:'ok'})});},
+  fetch:(url,o)=>{if(url.includes('/compatibility'))return Promise.resolve({ok:true,json:()=>Promise.resolve({result:url.endsWith('/progress')?{active:true,phase:'scanning',percent:50,processed_bytes:50,size_bytes:100}:{decision:'native'}})});posted.push({url,body:o&&o.body?JSON.parse(o.body):null});return Promise.resolve({ok:true,json:()=>Promise.resolve({result:'ok'})});},
   _printers:[],
   document:{getElementById:el,querySelectorAll:(s)=>{ if(s==='.fp-target:checked')return sb.__checked||[]; return [];},querySelector:(s)=>{const m=s.match(/data-printer="([^"]+)"/);return m&&sb.__cards&&sb.__cards[m[1]]||null;},addEventListener(){},activeElement:{tagName:'BODY'}},
   parseInt,String,Number,Object,Array,Promise,Error,JSON,Math,Date,console,

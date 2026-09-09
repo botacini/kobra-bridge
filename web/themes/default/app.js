@@ -3702,7 +3702,7 @@ function printerFilePrint(filename,btn){
   if(btn){btn.disabled=true;btn.textContent='…';}
   fetch(_apiUrl('/kx/printer-files/start'),{
     method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({filename:filename,auto_leveling:0})
+    body:JSON.stringify({filename:filename,auto_leveling:1})
   }).then(function(r){return r.json().then(function(d){if(!r.ok||d.error)throw new Error(d.error||('HTTP '+r.status));return d;});})
     .then(function(){clog('Print started: '+filename,'msg-ok');showPanel('dashboard');})
     .catch(function(e){clog('Print error: '+e.message,'msg-err');if(btn){btn.disabled=false;btn.textContent=label;}});
@@ -4211,9 +4211,9 @@ function openFilamentDialog(slots){
   var title=document.getElementById('fd-title');
   var body=document.getElementById('fd-slots');
   if(title)title.textContent=_storeFilename;
-  // S1 Max native LeviQ3 can wedge on conflicting bed metadata; default off.
+  // Auto-Leveling-Checkbox mit globalem Default vorbelegen
   var fdAl=document.getElementById('fd-auto-leveling');
-  if(fdAl) fdAl.checked=String(S.model_id)==='20029'?false:(S.auto_leveling===undefined?true:!!S.auto_leveling);
+  if(fdAl) fdAl.checked=(S.auto_leveling===undefined?true:!!S.auto_leveling);
   // Objekt-Liste laden — sobald eine File-ID auflösbar ist (Issue #57 Punkt 3:
   // Skip-Parität auch im Banner-/Upload-Modus, nicht nur im Store-Modus).
   // startReadyFileWithSlots() setzt _storeFileId auch im Banner-Modus per
@@ -4957,12 +4957,19 @@ var _flowTargets={};        // printer id -> true
 var _flowDrag=null;         // file id being dragged
 var _flowMaps={};           // printer id -> [slot_index per channel] (manual overrides)
 var _flowCompatCache={};    // file id -> printer id -> compatibility report
+var _flowCompatProgress={}; // file id -> shared source scan progress
+var _flowCompatPollToken=0;
 
 function _flowCompat(p,f){return f&&_flowCompatCache[String(f.id)]&&_flowCompatCache[String(f.id)][String(p.id)]||null;}
 function _flowCanTarget(p,f){var s=_flowState(p);return s==='ready'&&_flowFit(p,f).ok&&_compatAllows(_flowCompat(p,f));}
 function _flowCompatText(p,f){
-  var c=_flowCompat(p,f);
-  if(!c)return 'checking G-code compatibility…';
+  var c=_flowCompat(p,f),pr=f&&_flowCompatProgress[String(f.id)];
+  if(!c&&pr&&pr.active){
+    var stage=pr.phase==='hashing'?'Reading file':'Scanning commands';
+    var done=(Number(pr.processed_bytes)||0)/1048576,total=(Number(pr.size_bytes)||0)/1048576;
+    return 'Checking G-code compatibility · '+Math.round(pr.percent||0)+'% · '+stage+' '+done.toFixed(0)+'/'+total.toFixed(0)+' MB';
+  }
+  if(!c)return 'Checking G-code compatibility…';
   if(c.decision==='convertible')return 'G-code adjusted for '+(c.target_model_name||p.model_name||'this printer');
   if(c.decision==='blocked')return (c.reasons||['incompatible G-code']).join('; ');
   return '';
@@ -4973,7 +4980,19 @@ function _flowLoadCompat(f){
   var fid=String(f.id),cache=_flowCompatCache[fid]||(_flowCompatCache[fid]={}),printers=_farmLastStates.printers||[];
   var pending=printers.filter(function(p){return !cache[String(p.id)];});
   if(!pending.length)return Promise.resolve();
+  var token=++_flowCompatPollToken,finished=false,progressPrinter=pending[0];
+  function pollProgress(){
+    if(finished||token!==_flowCompatPollToken)return;
+    var base=(progressPrinter.bridge_url||'').replace(/\/+$/,'');
+    fetch(base+'/kx/files/'+encodeURIComponent(fid)+'/compatibility/progress',{cache:'no-store'})
+      .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+      .then(function(d){if(token!==_flowCompatPollToken)return;_flowCompatProgress[fid]=d.result||d;if(String(_flowSel)===fid)renderFlowJob();})
+      .catch(function(){})
+      .then(function(){if(!finished&&token===_flowCompatPollToken)setTimeout(pollProgress,500);});
+  }
+  pollProgress();
   return Promise.all(pending.map(function(p){return _fetchGcodeCompat(p,fid).then(function(c){cache[String(p.id)]=c;}).catch(function(e){cache[String(p.id)]={decision:'blocked',reasons:['Compatibility check failed: '+e.message]};});})).then(function(){
+    finished=true;_flowCompatProgress[fid]={active:false,phase:'done',percent:100};
     if(String(_flowSel)===fid){printers.forEach(function(p){if(_flowTargets[p.id]&&!_flowCanTarget(p,f))delete _flowTargets[p.id];});renderFarmOverview(_farmLastStates);}
   });
 }

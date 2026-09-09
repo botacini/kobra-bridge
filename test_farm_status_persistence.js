@@ -14,7 +14,7 @@ const sb={storeFiles:[],_farmLastStates:{printers:[]},_farmStateCache:{},_farmSe
   _kxEsc:s=>String(s==null?'':s),_apiUrl:p=>p,formatDur:s=>s+'s',_farmFmtTime:s=>s+'s',FARM_SERVICE_HOURS:500,
   _farmSeverity:()=>0,_farmNotifyFinished(){},_farmNotify(){},_farmAlerts:()=>[],_farmUpdateBulkBar(){},
   document:{getElementById:()=>null,querySelector:()=>null,querySelectorAll:()=>[],addEventListener(){}},
-  parseInt,String,Number,Object,Array,JSON,Math,Date,console,localStorage:{getItem:()=>null}};
+  parseInt,String,Number,Object,Array,JSON,Math,Date,console,setTimeout:(fn,ms)=>{if(ms<100)setImmediate(fn);return 0;},localStorage:{getItem:()=>null}};
 sb.window=sb;vm.createContext(sb);vm.runInContext(block,sb);
 
 // Fresh page: _farmQueue is empty (it died with the old tab). Bridge state says

@@ -409,6 +409,7 @@ class GCodeStore:
         os.makedirs(self._derived_dir, exist_ok=True)
         self._gcode_facts_cache: dict[tuple, object] = {}
         self._gcode_facts_locks: dict[str, threading.Lock] = {}
+        self._gcode_facts_progress: dict[str, dict] = {}
         db_path = os.path.join(data_dir, "kx-bridge.db")
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
@@ -823,6 +824,21 @@ class GCodeStore:
             self._conn.commit()
         return digest
 
+    def gcode_facts_progress(self, gcode_file: dict) -> dict:
+        path = gcode_file.get("path") or ""
+        stat = os.stat(path)
+        key = (path, stat.st_size, stat.st_mtime_ns)
+        with self._lock:
+            if key in self._gcode_facts_cache:
+                return {"active": False, "phase": "done", "percent": 100,
+                        "processed_bytes": stat.st_size, "size_bytes": stat.st_size}
+            progress = dict(self._gcode_facts_progress.get(path) or {})
+        if progress.get("cache_key") != key:
+            return {"active": False, "phase": "idle", "percent": 0,
+                    "processed_bytes": 0, "size_bytes": stat.st_size}
+        progress.pop("cache_key", None)
+        return progress
+
     def gcode_facts(self, gcode_file: dict):
         path = gcode_file.get("path") or ""
         stat = os.stat(path)
@@ -837,13 +853,34 @@ class GCodeStore:
                 cached = self._gcode_facts_cache.get(key)
             if cached is not None:
                 return cached
-            facts = inspect_gcode(path)
+
+            def on_progress(done: int, total: int, phase: str) -> None:
+                file_done = min(stat.st_size, done if phase == "hashing" else max(0, done - stat.st_size))
+                with self._lock:
+                    self._gcode_facts_progress[path] = {
+                        "cache_key": key, "active": done < total, "phase": phase,
+                        "percent": min(100, int(done * 100 / total)) if total else 0,
+                        "processed_bytes": file_done, "size_bytes": stat.st_size,
+                    }
+            try:
+                facts = inspect_gcode(path, on_progress)
+            except Exception as e:
+                with self._lock:
+                    self._gcode_facts_progress[path] = {
+                        "cache_key": key, "active": False, "phase": "error", "percent": 0,
+                        "processed_bytes": 0, "size_bytes": stat.st_size, "error": str(e),
+                    }
+                raise
             with self._lock:
                 # One current cache entry per path; old versions cannot grow forever.
                 self._gcode_facts_cache = {
                     k: v for k, v in self._gcode_facts_cache.items() if k[0] != path
                 }
                 self._gcode_facts_cache[key] = facts
+                self._gcode_facts_progress[path] = {
+                    "cache_key": key, "active": False, "phase": "done", "percent": 100,
+                    "processed_bytes": stat.st_size, "size_bytes": stat.st_size,
+                }
             return facts
 
     def gcode_for_model(self, gcode_file: dict, target, *, target_nozzle_mm: float = 0.4,
@@ -1558,6 +1595,7 @@ class KobraXBridge:
         self._ams_slots: list[dict] = []       # flat global list; each entry has global_index + box_id
         self._ams_loaded_slot: int = -1        # global slot index of currently loaded slot
         self._pending_load_slot: int = -1      # global slot index requested via /api/ams/feed type=1
+        self._last_feed_status: dict[int, tuple[int, int]] = {}  # box -> (status, slot), for edge-triggered tip forming
         self._ace_box_ids: list[int] = []      # detected ACE unit IDs (0..3)
         self._ace_auto_feed: dict[int, int] = {}   # per-box auto_feed state (0/1)
         self._head_tools_model: int = -1
@@ -2602,6 +2640,21 @@ class KobraXBridge:
             activity[global_slot] = act
         return activity
 
+    def _new_tip_form_events(self, boxes: list) -> list[tuple[int, int, int]]:
+        """Return feed completion transitions once, not on every status poll."""
+        events = []
+        for box in boxes:
+            box_id = int(box.get("id", -1))
+            fs = box.get("feed_status")
+            if not isinstance(fs, dict) or "current_status" not in fs:
+                continue  # Sparse slot-only reports must not erase feed state.
+            current = (int(fs["current_status"]), int(fs.get("slot_index", 0)))
+            previous = self._last_feed_status.get(box_id)
+            if int(fs.get("type", -1)) in (1, 2) and previous is not None and current[0] in (10, 11) and previous != current:
+                events.append((box_id, current[1], current[0]))
+            self._last_feed_status[box_id] = current
+        return events
+
     def _on_multicolor_box(self, payload: dict):
         if payload.get("state") == "failed":
             req = getattr(self, "_last_ams_set_request", None)
@@ -2635,24 +2688,19 @@ class KobraXBridge:
         for s in global_slots:
             s["activity"] = activity_map.get(s.get("global_index"), "")
 
-        # Tip forming: after feed-in (status=10) or feed-out (status=11)
-        # the original slicer automatically sends type=3 (extruder retract).
-        # Check ALL boxes so ACE-triggered events are handled correctly.
-        for box in boxes:
-            fs = box.get("feed_status") or {}
-            current_status = fs.get("current_status")
-            slot_index = fs.get("slot_index", 0)
-            box_id = box.get("id", -1)
-            if current_status in (10, 11):
-                def _tip_form(bi=box_id, si=slot_index, cs=current_status):
-                    import time; time.sleep(2)
-                    self.client.publish(
-                        "multiColorBox", "feedFilament",
-                        {"multi_color_box": [{"id": bi, "feed_status": {"slot_index": si, "type": 3}}]},
-                        timeout=0
-                    )
-                    log.info(f"Tip forming (type=3) after status={cs} box={bi} slot={si}")
-                threading.Thread(target=_tip_form, daemon=True).start()
+        # Tip forming is edge-triggered. S1 Max keeps terminal feed_status=10
+        # in every getInfo reply; treating that level as a new event resent
+        # type=3 once/minute and interfered with the native preparation workflow.
+        for box_id, slot_index, current_status in self._new_tip_form_events(boxes):
+            def _tip_form(bi=box_id, si=slot_index, cs=current_status):
+                import time; time.sleep(2)
+                self.client.publish(
+                    "multiColorBox", "feedFilament",
+                    {"multi_color_box": [{"id": bi, "feed_status": {"slot_index": si, "type": 3}}]},
+                    timeout=0
+                )
+                log.info(f"Tip forming (type=3) after status={cs} box={bi} slot={si}")
+            threading.Thread(target=_tip_form, daemon=True).start()
 
         if global_slots:
             self._ams_slots = global_slots
@@ -3549,28 +3597,17 @@ class KobraXBridge:
                 self._clear_print_pending(pending_token)
                 return self._json_cors({"error": "file not found on printer"}, status=404)
 
-            assignments = body.get("filament_assignments")
-            if assignments:
-                ams_box_mapping, _, invalid_count = self._build_assigned_ams_box_mapping(assignments)
-                if invalid_count and not ams_box_mapping:
-                    self._clear_print_pending(pending_token)
-                    return self._json_cors({"error": "no usable filament assignments for current filament mode"}, status=400)
-            else:
-                ams_box_mapping = self._build_auto_ams_box_mapping()
+            # The printer already owns the matching .acm sidecar. Omitting
+            # ams_settings preserves that mapping instead of guessing from every
+            # currently loaded slot (which selected the wrong material on S1 Max).
             payload = {
                 "filename": filename,
                 "filepath": "/",
                 "taskid": str(uuid.uuid4().int % 1000000),
                 "task_mode": 1,
                 "filetype": 1,
-                "ams_settings": {
-                    "use_ams": bool(ams_box_mapping),
-                    "ams_box_mapping": ams_box_mapping,
-                },
                 "task_settings": {
-                    # Printer-local starts default off: this S1 Max's native
-                    # LeviQ3 path wedged after a 75 C config / 65 C model mismatch.
-                    "auto_leveling": 1 if body.get("auto_leveling") in (1, True) else 0,
+                    "auto_leveling": 1 if body.get("auto_leveling", getattr(self._args, "auto_leveling", 1)) in (1, True) else 0,
                     "vibration_compensation": 1 if body.get("vibration_compensation") in (1, True) else 0,
                     "flow_calibration": 1 if body.get("flow_calibration") in (1, True) else 0,
                 },
@@ -4413,6 +4450,19 @@ class KobraXBridge:
             return self._json_cors({"error": str(e)}, status=422)
         return self._json_cors({"result": result})
 
+    async def handle_kx_file_compatibility_progress(self, request):
+        file_id = request.match_info.get("file_id", "")
+        def read_progress():
+            gcode_file = self._store.get_file(file_id)
+            return self._store.gcode_facts_progress(gcode_file) if gcode_file else None
+        try:
+            result = await asyncio.get_event_loop().run_in_executor(None, read_progress)
+        except OSError as e:
+            return self._json_cors({"error": str(e)}, status=404)
+        if result is None:
+            return self._json_cors({"error": "file not found"}, status=404)
+        return self._json_cors({"result": result})
+
     def _upload_to_printer(self, path: str, filename: str) -> dict:
         """Upload one file to this printer, publishing progress as it goes."""
         self._set_upload_progress(filename, 0, 0, "sending")
@@ -4568,8 +4618,7 @@ class KobraXBridge:
             # No dialog -> all occupied slots as with a normal upload print
             ams_box_mapping = self._build_auto_ams_box_mapping()
 
-        default_auto_leveling = 0 if self._model and self._model.model_id == "20029" else getattr(self._args, "auto_leveling", 1)
-        auto_leveling = int(body.get("auto_leveling", default_auto_leveling))
+        auto_leveling = int(body.get("auto_leveling", getattr(self._args, "auto_leveling", 1)))
         filename = gcode_file["filename"]
 
         if self._state.get("print_state") in (
@@ -7130,6 +7179,7 @@ def build_app(bridge: KobraXBridge) -> web.Application:
     r.add_get("/kx/files",                bridge.handle_kx_files)
     r.add_delete("/kx/files/{file_id}",    bridge.handle_kx_file_delete)
     r.add_get("/kx/files/{file_id}/compatibility", bridge.handle_kx_file_compatibility)
+    r.add_get("/kx/files/{file_id}/compatibility/progress", bridge.handle_kx_file_compatibility_progress)
     r.add_get("/kx/files/{file_id}/download", bridge.handle_kx_file_download)
     r.add_get("/kx/files/{file_id}/thumbnail", bridge.handle_kx_file_thumbnail)
     r.add_post("/kx/files/{file_id}/verify", bridge.handle_kx_file_verify)
