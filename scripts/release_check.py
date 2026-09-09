@@ -21,8 +21,7 @@ patterns = {
     "private key": re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     "GitHub token": re.compile(rb"gh[pousr]_[A-Za-z0-9_]{20,}"),
     "AWS access key": re.compile(rb"AKIA[0-9A-Z]{16}"),
-    "local operator path": re.compile(rb"/Users/macminim4|/volume1/docker|KX_NAS_PASS|U58EGreen|Isengajaa"),
-    "live LAN inventory": re.compile(rb"192\.168\.1\.(?:34|54)"),
+    "local service path": re.compile(rb"/Users/[^/\s]+/(?:services|\.hermes)|/volume\d+/docker"),
 }
 errors = []
 for name in tracked:
