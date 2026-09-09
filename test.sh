@@ -5,6 +5,7 @@ NODE=${NODE:-node}
 
 $PYTHON test_kobra_models.py
 $PYTHON test_s1_info_state.py
+$PYTHON test_s1_camera_source.py
 $PYTHON test_s1_slots.py
 $PYTHON test_kobra_gcode_compat.py
 $PYTHON test_target_file_preparation.py

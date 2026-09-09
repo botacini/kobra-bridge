@@ -1618,6 +1618,8 @@ class KobraXBridge:
         self._history_reconciled: bool = False
         self._camera_autostarted: bool = False
         self._camera_user_stopped: bool = False  # user manually stopped the camera during a print
+        self._camera_source: str = "anycubic"
+        self._camera_anycubic_url: str = ""
         self.camera_cache: CameraCache = CameraCache()
 
         self._thumbnail_b64: str = ""
@@ -2184,8 +2186,10 @@ class KobraXBridge:
         if urls.get("fileUploadurl"):
             self._state["upload_url"] = urls["fileUploadurl"]
         if urls.get("rtspUrl") and CAMERA_ENABLED:
-            self._state["camera_url"] = urls["rtspUrl"]
-            self.camera_cache.set_url(urls["rtspUrl"])
+            self._camera_anycubic_url = urls["rtspUrl"]
+            if getattr(self, "_camera_source", "anycubic") != "rinkhals":
+                self._state["camera_url"] = urls["rtspUrl"]
+                self.camera_cache.set_url(urls["rtspUrl"])
         fan = d.get("fan_speed_pct")
         if fan is not None:
             self._state["fan_speed"] = int(fan)
@@ -5795,6 +5799,45 @@ class KobraXBridge:
             ))
         return web.json_response({"result": "ok"})
 
+    async def _resolve_camera_url(self) -> str:
+        """Prefer Rinkhals' working MJPEG stream on S1-family printers."""
+        fallback = getattr(self, "_camera_anycubic_url", "") or self._state.get("camera_url", "")
+        if getattr(self._model, "camera_transport", "") == "rinkhals-or-anycubic":
+            ip = str(getattr(self._args, "printer_ip", "") or "").strip()
+            try:
+                timeout = aiohttp.ClientTimeout(total=2)
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(f"http://{ip}/server/webcams/list", timeout=timeout) as response:
+                        if response.status == 200:
+                            webcams = (await response.json()).get("result", {}).get("webcams", [])
+                            camera = next((cam for cam in webcams
+                                           if cam.get("enabled") and cam.get("stream_url")), None)
+                            stream = str((camera or {}).get("stream_url") or "")
+                            snapshot = str((camera or {}).get("snapshot_url") or "")
+                            def absolute(url):
+                                parsed = urlsplit(url)
+                                if url.startswith("/"):
+                                    return f"http://{ip}{url}"
+                                if parsed.scheme in ("http", "https") and parsed.hostname == ip:
+                                    return url
+                                return ""
+                            stream, snapshot = absolute(stream), absolute(snapshot)
+                            if stream and snapshot:
+                                async with session.get(snapshot, timeout=timeout) as snap:
+                                    valid = snap.status == 200 and await snap.content.read(2) == b"\xff\xd8"
+                                if valid:
+                                    self._camera_source = "rinkhals"
+                                    self._state["camera_url"] = stream
+                                    self.camera_cache.set_url(stream)
+                                    return stream
+            except Exception as exc:
+                log.info(f"Rinkhals camera unavailable, using Anycubic stream: {exc}")
+        self._camera_source = "anycubic"
+        if fallback:
+            self._state["camera_url"] = fallback
+            self.camera_cache.set_url(fallback)
+        return fallback
+
     async def handle_api_camera(self, request):
         if not CAMERA_ENABLED:
             return web.json_response({"url": "", "disabled": True})
@@ -5803,6 +5846,9 @@ class KobraXBridge:
     async def handle_api_camera_start(self, request):
         if not CAMERA_ENABLED:
             return web.json_response({"result": "disabled", "state": "disabled"})
+        await self._resolve_camera_url()
+        if self._camera_source == "rinkhals":
+            return web.json_response({"result": "ok", "state": "ready", "source": "rinkhals"})
         loop = asyncio.get_event_loop()
         # Wait for pushStarted confirmation before returning
         result = await loop.run_in_executor(None, lambda: self.client.publish(
@@ -5810,7 +5856,7 @@ class KobraXBridge:
         ))
         state = (result or {}).get("state", "")
         log.info(f"Camera startCapture: state={state}")
-        return web.json_response({"result": "ok", "state": state})
+        return web.json_response({"result": "ok", "state": state, "source": "anycubic"})
 
     async def handle_api_camera_stop(self, request):
         if not CAMERA_ENABLED:
@@ -5819,10 +5865,13 @@ class KobraXBridge:
             body = await request.json()
         except Exception:
             body = {}
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, lambda: self.client.publish(
-            "video", "stopCapture", None, timeout=0
-        ))
+        if getattr(self, "_camera_source", "anycubic") == "rinkhals":
+            self.camera_cache.reset()
+        else:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, lambda: self.client.publish(
+                "video", "stopCapture", None, timeout=0
+            ))
         # Prevents the auto-start guard from restarting the camera during the
         # laufenden Drucks wieder einschaltet (State-Flicker-Problem).
         # A timed farm preview ending is not the operator opting out, so it

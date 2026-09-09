@@ -52,7 +52,7 @@ MODELS: dict[str, KobraModel] = {
         nozzle_diameters_mm=(0.2, 0.4, 0.6, 0.8),
         max_nozzle_c=320, max_bed_c=120, max_chamber_c=0,
         max_colors=8, max_ace_units=2, enclosed=True,
-        camera_transport="anycubic-flv", orca_profile="Anycubic Kobra S1 0.4 nozzle",
+        camera_transport="rinkhals-or-anycubic", orca_profile="Anycubic Kobra S1 0.4 nozzle",
         max_xy_speed_mm_s=600, max_xy_accel_mm_s2=20000,
     ),
     "20029": KobraModel(
@@ -62,7 +62,7 @@ MODELS: dict[str, KobraModel] = {
         nozzle_diameters_mm=(0.25, 0.4, 0.6, 0.8),
         max_nozzle_c=350, max_bed_c=120, max_chamber_c=65,
         max_colors=16, max_ace_units=4, enclosed=True,
-        camera_transport="anycubic-flv", orca_profile="Anycubic Kobra S1 Max 0.4 nozzle",
+        camera_transport="rinkhals-or-anycubic", orca_profile="Anycubic Kobra S1 Max 0.4 nozzle",
         max_xy_speed_mm_s=600, max_xy_accel_mm_s2=20000,
     ),
 }
