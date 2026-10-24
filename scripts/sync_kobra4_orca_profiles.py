@@ -20,6 +20,7 @@ import tempfile
 
 MACHINE_SOURCE = "Anycubic Kobra 4 0.4 nozzle.json"
 MACHINE_TARGETS = (
+    "Anycubic Kobra 4 Official - 0.4 nozzle",
     "Anycubic Kobra 4 - 0.4 nozzle",
     "Anycubic Kobra 4 - 0.4 nozzle - fil change alter",
 )
