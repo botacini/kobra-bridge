@@ -1,6 +1,6 @@
 # Kobra Bridge
 
-A local Moonraker-compatible bridge for **Anycubic Kobra X, Kobra S1, and Kobra S1 Max** printers.
+A local Moonraker-compatible bridge for **Anycubic Kobra 4, Kobra X, Kobra S1, and Kobra S1 Max** printers.
 
 **Kobra Bridge is based on [KX-Bridge by viewit](https://gitea.it-drui.de/viewit/KX-Bridge-Release).** It remains GPLv3 and retains the upstream copyright and NOTICE. The Kobra Bridge modifications add model-aware S1/S1 Max support, multi-printer farm behavior, persistent dispatch state, and fail-closed cross-model G-code adaptation.
 
@@ -8,7 +8,7 @@ A local Moonraker-compatible bridge for **Anycubic Kobra X, Kobra S1, and Kobra 
 
 ## What works
 
-- Kobra X (`modelId 20030`), Kobra S1 (`20025`), and Kobra S1 Max (`20029`)
+- Kobra 4 (`modelId 20028`), Kobra X (`20030`), Kobra S1 (`20025`), and Kobra S1 Max (`20029`)
 - Signed Anycubic LAN discovery (`/info` → `/ctrl`), MQTT/TLS status and control, HTTP G-code upload
 - One process and dashboard for multiple printers, one HTTP port per printer
 - Print, pause, resume, cancel, temperatures, fans, lights, file library, history, camera and ACE state where supported
@@ -50,7 +50,15 @@ BRIDGE_HOST_IP=192.168.1.100 docker compose up -d --build
 
 Open `http://192.168.1.100:7125`, choose **Add printer**, and enter only the printer IP. The bridge discovers model ID and LAN credentials. Additional printers use ports 7126, 7127, and so on.
 
+For an existing `[connection]` or `[printer_N]` entry with an IP but missing LAN credentials, startup performs the same local `/info` → `/ctrl` discovery and saves the result atomically to the gitignored `config/config.ini`.
+
 Connect OrcaSlicer using Moonraker and the matching bridge URL, for example `http://192.168.1.100:7125`.
+
+Uploads received on Moonraker's `/server/files/upload` (and OrcaSlicer's
+`/api/files/local` alias) are saved in the bridge library, transferred through
+the printer's `/gcode_upload` endpoint, and accepted only after an MQTT
+`file/listLocal` response confirms the same filename and size. An upload never
+starts a print, even when the slicer sends `print=true`.
 
 ## Python
 

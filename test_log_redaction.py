@@ -15,11 +15,13 @@ raw={
  'urls':{'fileUploadurl':'http://192.168.1.24:18910/gcode_upload?s=SECRET_SESSION',
          'rtspUrl':'http://192.168.1.24:18088/live/SECRET_STREAM'},
  'password':'SECRET_PASSWORD','token':'SECRET_TOKEN',
+ 'username':'SECRET_USERNAME','deviceId':'SECRET_DEVICE_ID',
  'nested':[{'api_key':'SECRET_KEY','safe':'ok'}],
 }
 out=m._redact_log_data(raw)
 encoded=json.dumps(out)
-for secret in ('SECRET_SESSION','SECRET_STREAM','SECRET_PASSWORD','SECRET_TOKEN','SECRET_KEY'):
+for secret in ('SECRET_SESSION','SECRET_STREAM','SECRET_PASSWORD','SECRET_TOKEN','SECRET_KEY',
+               'SECRET_USERNAME','SECRET_DEVICE_ID'):
  assert secret not in encoded,secret
 assert out['ip']=='192.168.1.24' and out['nested'][0]['safe']=='ok'
 assert raw['urls']['fileUploadurl'].endswith('SECRET_SESSION'),'redaction must not mutate runtime payload'
@@ -34,4 +36,10 @@ c._dispatch('any/x/info/report',{'state':'done','data':raw})
 joined='\n'.join(h.lines);m.log.removeHandler(h)
 assert 'SECRET_' not in joined,joined
 assert '192.168.1.24' in joined,'safe diagnostics should remain'
+assert '0123456789abcdef' not in m._redact_topic(
+ 'anycubic/anycubicCloud/v1/printer/public/20028/0123456789abcdef/#')
+h.lines.clear();m.log.addHandler(h)
+c._dispatch('any/x/0123456789abcdef/response', {'code':0, 'data':None})
+joined='\n'.join(h.lines);m.log.removeHandler(h)
+assert '0123456789abcdef' not in joined,joined
 print('log redaction: all checks passed')

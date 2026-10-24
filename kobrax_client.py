@@ -43,7 +43,10 @@ import env_loader
 
 log = logging.getLogger("kobrax.mqtt")
 
-_LOG_SECRET_KEYS = {"password", "token", "secret", "api_key", "apikey", "authorization"}
+_LOG_SECRET_KEYS = {
+    "password", "username", "token", "secret", "api_key", "apikey",
+    "authorization", "device_id", "deviceid", "did", "usn",
+}
 
 
 def _redact_log_data(value):
@@ -64,11 +67,23 @@ def _redact_log_data(value):
     return value
 
 
+def _redact_topic(topic: str) -> str:
+    """Hide the per-printer identifier embedded in Anycubic MQTT topics."""
+    parts = str(topic).split("/")
+    if len(parts) >= 2 and parts[-1] == "#":
+        parts[-2] = "***"
+    elif len(parts) >= 2:
+        parts[-2] = "***"
+    return "/".join(parts)
+
+
 _SCRIPT_DIR = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
 # Anycubic's slicer client certificate is third-party material (see NOTICE.md);
 # Kobra Bridge does not ship it. Point KOBRA_CERT_DIR at a directory holding
 # anycubic_slicer.crt / anycubic_slicer.key, or place them next to this file.
-_CERT_DIR = os.environ.get("KOBRA_CERT_DIR") or _SCRIPT_DIR
+_REPO_CERT_DIR = os.path.join(_SCRIPT_DIR, "certs")
+_CERT_DIR = (os.environ.get("KOBRA_CERT_DIR")
+             or (_REPO_CERT_DIR if os.path.isdir(_REPO_CERT_DIR) else _SCRIPT_DIR))
 CERT_FILE = os.path.join(_CERT_DIR, "anycubic_slicer.crt")
 KEY_FILE  = os.path.join(_CERT_DIR, "anycubic_slicer.key")
 
@@ -351,7 +366,7 @@ class KobraXClient:
             self._pid += 1
         if not self._send(_build_subscribe(topic, pid)):
             raise ConnectionError(f"MQTT subscribe send failed: {self._last_send_error or 'not connected'}")
-        log.info("SUB %s", topic)
+        log.info("SUB %s", _redact_topic(topic))
 
     # -- Read loop -----------------------------------------------------------
 
@@ -468,7 +483,12 @@ class KobraXClient:
         return hashlib.md5(json.dumps(stable, sort_keys=True).encode(), usedforsecurity=False).hexdigest()
 
     def _dispatch(self, topic: str, payload: dict):
-        suffix = "/".join(topic.split("/")[-2:])
+        topic_parts = topic.split("/")
+        # Generic transport acknowledgements are published directly below the
+        # device-id segment.  Keeping the old "<device-id>/response" suffix in
+        # logs exposed that identifier and served no routing purpose.
+        suffix = ("response" if topic_parts[-1:] == ["response"]
+                  else "/".join(topic_parts[-2:]))
 
         # Structured RX log with dedup suppression
         h = self._dedup_hash(suffix, payload)
@@ -503,7 +523,7 @@ class KobraXClient:
         # but its all-empty code=0 envelope is not the command result. The real
         # business reply follows on `<type>/report` and may use another msgid.
         # Waking here made print/start report a false rejection immediately.
-        empty_ack = (suffix.endswith("/response")
+        empty_ack = ((suffix == "response" or suffix.endswith("/response"))
                      and payload.get("code") == 0
                      and payload.get("data") is None
                      and not any(payload.get(k) for k in ("action", "state", "type", "msg")))

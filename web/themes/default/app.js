@@ -1,7 +1,7 @@
 // ── State ──
 var S={nozzle_temp:0,nozzle_target:0,bed_temp:0,bed_target:0,
   print_state:'standby',filename:'',progress:0,print_duration:0,remain_time:0,
-  curr_layer:0,total_layers:0,z_mm:0,printer_name:'Kobra X',firmware_version:'–',
+  curr_layer:0,total_layers:0,z_mm:0,printer_name:'',firmware_version:'–',
   camera_url:'',fan_speed:0,print_speed_mode:2,light_on:false,light_brightness:80,
   ams_slots:[],filament_mode:'toolhead',ace_units:[],ace_dry_presets:null,ace_drying:{status:0,target_temp:0,duration:0,remain_time:0,humidity:null,current_temp:null,units:[]},web_upload_warning:1};
 var tempHistory={n:[],b:[]};
@@ -424,7 +424,7 @@ function _printerOrigin(p){
 function renderPrinterDropdown(){
   var wrap=document.getElementById('printer-dropdown-wrap');
   var single=document.getElementById('h-pname-single');
-  var name=_printers.length===0?'–':(_activePrinter?(_activePrinter.name||'Kobra X'):'Kobra X');
+  var name=_printers.length===0?'–':(_activePrinter?(_activePrinter.name||_activePrinter.model_name||'Anycubic Kobra'):'Anycubic Kobra');
   var pname=document.getElementById('h-pname');
   if(pname)pname.textContent=name;
   if(single)single.textContent=name;
@@ -1067,7 +1067,12 @@ function applyState(){
   var _pn=_printers.length===0?'–':((_activePrinter&&_activePrinter.name)||s.printer_name);
   var _el=document.getElementById('h-pname');if(_el)_el.textContent=_pn;
   var _el2=document.getElementById('h-pname-single');if(_el2)_el2.textContent=_pn;
-  var hv=document.getElementById('h-version');if(hv&&s.version)hv.textContent='v'+s.version;
+  var hv=document.getElementById('h-version');
+  if(hv)hv.textContent=(s.firmware_version&&s.firmware_version!=='unknown')?'FW '+s.firmware_version:'';
+  var verifyMsg=document.getElementById('store-web-verify-msg');
+  if(verifyMsg&&T.store_web_verify_msg){
+    verifyMsg.textContent=T.store_web_verify_msg.replace(/Anycubic Kobra X/g,_pn||'Anycubic Kobra');
+  }
 
 
   // temps

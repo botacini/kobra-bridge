@@ -42,6 +42,7 @@ import logging
 import os
 import pathlib
 import re
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -96,8 +97,10 @@ def _kx_generate_signature(token: str, ts: int, nonce: str) -> str:
 
 
 def _kx_decrypt_info(encrypted_b64: str, key: str, iv: str) -> dict:
+    if len(key.encode()) != 16 or len(iv.encode()) != 16:
+        raise ValueError("invalid LAN credential encryption parameters")
     cipher = _AES.new(key.encode(), _AES.MODE_CBC, iv.encode())
-    raw = _base64.b64decode(encrypted_b64)
+    raw = _base64.b64decode(encrypted_b64, validate=True)
     return json.loads(_unpad(cipher.decrypt(raw), _AES.block_size).decode())
 
 
@@ -105,28 +108,36 @@ async def _kx_fetch_credentials(ip: str, port: int = 18910) -> dict:
     """Fetches + decrypts printer credentials via HTTP /info + /ctrl.
 
     Raises an exception on network/decrypt errors. Algorithm from
-    tools/fetch_credentials.py (AES-256-CBC, Key=token[16:32], IV=ctrl-token).
+    Anycubic Slicer Next (AES-128-CBC, Key=token[16:32], IV=ctrl-token).
     """
     if not _HAS_CRYPTO:
         raise RuntimeError("pycryptodome is not installed")
-    import random, string
-    nonce = "".join(random.choice(string.ascii_letters + string.digits) for _ in range(6))
+    alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    nonce = "".join(secrets.choice(alphabet) for _ in range(6))
     timeout = aiohttp.ClientTimeout(total=10)
     async with aiohttp.ClientSession() as s:
         async with s.get(f"http://{ip}:{port}/info", timeout=timeout) as r:
             r.raise_for_status()
             info = await r.json()
-        token = info["token"]
+        token = str(info["token"])
+        if len(token.encode()) != 32:
+            raise ValueError("invalid /info token")
         ts = int(time.time() * 1000)
         sign = _kx_generate_signature(token, ts, nonce)
         params = {"ts": ts, "nonce": nonce, "sign": sign, "did": "random"}
         async with s.post(f"http://{ip}:{port}/ctrl", params=params, timeout=timeout) as r:
             r.raise_for_status()
             data = await r.json()
-    result = _kx_decrypt_info(data["data"]["info"], token[16:32], data["data"]["token"])
+    ctrl_data = data["data"]
+    result = _kx_decrypt_info(ctrl_data["info"], token[16:32], ctrl_data["token"])
     if "error" in result:
         raise RuntimeError(result.get("error", "decrypt failed"))
+    missing = [key for key in ("username", "password", "deviceId") if not result.get(key)]
+    if missing:
+        raise ValueError("incomplete LAN credentials")
     model_id = str(info.get("modelId") or result.get("modeId") or "")
+    if not model_id:
+        raise ValueError("missing printer model ID")
     return {
         "printer_ip": result.get("ip", ip),
         "username":   result.get("username", ""),
@@ -136,6 +147,41 @@ async def _kx_fetch_credentials(ip: str, port: int = 18910) -> dict:
         "model_id":   model_id,
         "model":      info.get("modelName") or result.get("modelName") or "Anycubic Kobra",
     }
+
+
+def _kx_discovery_error(exc: Exception) -> str:
+    """Return a useful error that never includes signed URLs or response data."""
+    if isinstance(exc, asyncio.TimeoutError):
+        return "LAN credential discovery timed out"
+    if isinstance(exc, aiohttp.ClientResponseError):
+        return f"LAN credential discovery returned HTTP {exc.status}"
+    if isinstance(exc, aiohttp.ClientConnectionError):
+        return "LAN credential endpoint is unreachable"
+    if isinstance(exc, KeyError):
+        return "LAN credential response is missing required fields"
+    if isinstance(exc, (ValueError, json.JSONDecodeError)):
+        return "LAN credential response is invalid"
+    return f"LAN credential discovery failed ({type(exc).__name__})"
+
+
+def _kx_credentials_missing(args) -> bool:
+    return any(not str(getattr(args, field, "") or "").strip()
+               for field in ("username", "password", "device_id", "mode_id"))
+
+
+def _kx_printer_display_name(args) -> str:
+    """Resolve a configured custom name without masking a detected model.
+
+    Older single-printer configurations used ``Anycubic Kobra X`` as an
+    implicit default.  It is not a custom name when the discovered model ID
+    identifies another printer.
+    """
+    model = model_for_id(getattr(args, "model_id", "") or getattr(args, "mode_id", ""))
+    configured = str(env_loader.get("BRIDGE_PRINTER_NAME", "") or "").strip()
+    legacy_default = configured in ("Kobra X", "Anycubic Kobra X")
+    if configured and not (legacy_default and model and model.model_id != "20030"):
+        return configured
+    return model.name if model else "Anycubic Kobra"
 
 logging.basicConfig(level=logging.INFO,
                     format="[%(asctime)s] %(levelname)-5s %(name)s: %(message)s",
@@ -1560,7 +1606,7 @@ class KobraXBridge:
           # currentZ from curr_layer + these values in build_print_payload.
           "layer_height":       0.0,
           "first_layer_height": 0.0,
-          "printer_name":       env_loader.get("BRIDGE_PRINTER_NAME", "Anycubic Kobra X"),
+          "printer_name":       _kx_printer_display_name(args),
           "firmware_version":   "unknown",
           "upload_url":         "",
           "camera_url":         "",
@@ -4218,6 +4264,7 @@ class KobraXBridge:
                 "bridge_url": bridge_url,
                 "printer_ip": br._args.printer_ip,
                 "device_id":  br._args.device_id or "",
+                "firmware_version": br._state.get("firmware_version", "unknown"),
                 **br._model_payload(),
             })
         return self._json_cors({"result": out})
@@ -4468,7 +4515,7 @@ class KobraXBridge:
         return self._json_cors({"result": result})
 
     def _upload_to_printer(self, path: str, filename: str) -> dict:
-        """Upload one file to this printer, publishing progress as it goes."""
+        """Upload one file and require storage confirmation from the printer."""
         self._set_upload_progress(filename, 0, 0, "sending")
         last = [0.0]
 
@@ -4491,8 +4538,49 @@ class KobraXBridge:
         if not result or result.get("code") != 200:
             self._set_upload_progress(filename, 0, 0, "error", f"printer rejected upload: {result}")
             raise RuntimeError(f"target printer upload failed: {result}")
-        self._set_upload_progress(filename, 0, 0, "done")
+        total = os.path.getsize(path)
+        confirmation = self._confirm_printer_file(filename, total)
+        if not confirmation:
+            msg = "printer accepted upload but did not confirm the stored file"
+            self._set_upload_progress(filename, total, total, "error", msg)
+            raise RuntimeError(msg)
+        self._set_upload_progress(filename, total, total, "done")
+        result = dict(result)
+        result["confirmed"] = True
+        result["stored_size"] = int(confirmation.get("size") or 0)
         return result
+
+    def _confirm_printer_file(self, filename: str, expected_size: int,
+                              attempts: int = 3, timeout: float = 5.0) -> dict | None:
+        """Confirm an upload through MQTT ``file/listLocal``.
+
+        An HTTP 200 from ``/gcode_upload`` only acknowledges the request.  The
+        upload is successful to callers only after the printer reports the file
+        with the expected size in its own storage listing.
+        """
+        wanted = os.path.basename(filename)
+        for attempt in range(max(1, int(attempts))):
+            listing = self._wait_for_file_action(
+                "listLocal",
+                lambda: self.client.publish(
+                    "file", "listLocal",
+                    {"page_num": 1, "page_size": 200, "path": "/"},
+                    timeout=0,
+                ),
+                timeout=timeout,
+            )
+            records = ((listing or {}).get("data") or {}).get("records") or []
+            for record in records:
+                try:
+                    size_matches = int(record.get("size") or 0) == int(expected_size)
+                except (TypeError, ValueError):
+                    size_matches = False
+                if record.get("filename") == wanted and size_matches:
+                    log.info("Printer confirmed stored file: %s (%s bytes)", wanted, expected_size)
+                    return record
+            if attempt + 1 < attempts:
+                time.sleep(0.4)
+        return None
 
     def _ensure_gcode_on_printer(self, gcode_file: dict) -> bool:
         """Copy a store file to this printer when it is not already there.
@@ -4765,12 +4853,13 @@ class KobraXBridge:
         })
 
     async def handle_machine_system_info(self, request):
+        printer_name = self._state.get("printer_name") or "Anycubic Kobra"
         return web.json_response({
             "result": {
                 "system_info": {
                     "cpu_info": {"cpu_count": 4, "bits": "64bit", "processor": "armv7l",
-                                 "cpu_desc": "Anycubic Kobra X Bridge", "serial_number": "",
-                                 "hardware_desc": "", "model": "Kobra X Bridge",
+                                 "cpu_desc": f"{printer_name} Bridge", "serial_number": "",
+                                 "hardware_desc": "", "model": printer_name,
                                  "total_memory": 524288, "memory_units": "kB"},
                     "sd_info": {},
                     "distribution": {"name": "Linux", "id": "linux", "version": "1.0",
@@ -5086,29 +5175,47 @@ class KobraXBridge:
         del file_data  # free RAM
 
         self._last_uploaded_file = remote_filename
-        log.info(f"Upload: {remote_filename} ({file_size} bytes) md5={file_md5} -> store only")
+        log.info(f"Upload received: {remote_filename} ({file_size} bytes) md5={file_md5}")
 
-        # Library-only upload. A slicer upload used to be copied straight into
-        # this port's printer (and started when print=true), so slicing always
-        # pushed G-code to whichever printer owned the port OrcaSlicer targets.
-        # Operator picks the destination explicitly via /kx/upload-local, so the
-        # transfer and the auto-print are both refused here.
-        # ponytail: unconditional policy, make it a config flag if a printer ever
-        # needs the old upload-and-print behaviour back.
+        # OrcaSlicer may set print=true even for its send workflow. Uploading is
+        # safe, but starting a print is a separate operation and continues to go
+        # through handle_kx_print and its compatibility checks.
         if request.rel_url.query.get("print", "").lower() == "true" or auto_print:
-            log.info(f"Ignoring slicer print=true for {remote_filename}: "
-                     f"library-only upload, start it from the UI instead")
+            log.info(f"Ignoring slicer print=true for {remote_filename}: upload only")
         auto_print = False
 
-        serve_url = self._serve_url(remote_filename)
-        self._state["last_upload_url"]  = serve_url
+        gcode_file = self._store.get_file(file_md5)
+        if not gcode_file:
+            log.error("Upload storage lookup failed for %s", remote_filename)
+            return web.json_response({
+                "error": "file was received but could not be reopened from bridge storage",
+                "stage": "bridge_storage",
+            }, status=500)
+        try:
+            uploaded = await loop.run_in_executor(
+                None, lambda: self._ensure_gcode_on_printer(gcode_file))
+        except Exception as e:
+            log.error("Printer transfer failed for %s: %s", remote_filename, e)
+            return web.json_response({
+                "error": str(e),
+                "stage": "printer_transfer",
+                "stored_in_bridge": True,
+            }, status=502)
+
+        self._state["last_upload_url"]  = ""
         self._state["last_upload_md5"]  = file_md5
         self._state["last_upload_size"] = file_size
-        # file_ready drives the UI's "ready to print" affordance, which is still
-        # correct: the file is in the shared library, just not on any printer.
         self._state["file_ready"] = remote_filename
 
-        return self._octoprint_upload_response(request, remote_filename, file_id=file_md5)
+        return self._octoprint_upload_response(
+            request, remote_filename, file_id=file_md5,
+            extra={"printer_transfer": {
+                "confirmed": True,
+                "uploaded": bool(uploaded),
+                "filename": remote_filename,
+                "size": file_size,
+            }},
+        )
 
     @staticmethod
     def _octoprint_upload_response(request, remote_filename: str, extra: dict | None = None,
@@ -5303,7 +5410,7 @@ class KobraXBridge:
         return web.json_response({
             "api":     "0.1",
             "server":  "1.9.0",
-            "text":    "OctoPrint (Kobra X Bridge)",
+            "text":    "OctoPrint (Kobra Bridge)",
         })
 
     async def handle_kx_ui_asset(self, request):
@@ -5384,7 +5491,9 @@ class KobraXBridge:
             # stalled /server/info for 1.9 s on the NAS. Assemble once, reuse.
             self._index_page_cache = await asyncio.get_event_loop().run_in_executor(
                 None, self._build_index_page, tpl)
-        resp = web.Response(text=self._index_page_cache, content_type="text/html",
+        display_name = html.escape(self._state.get("printer_name") or "Anycubic Kobra", quote=True)
+        page = self._index_page_cache.replace("__PRINTER_NAME__", display_name)
+        resp = web.Response(text=page, content_type="text/html",
                             headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
         # This page inlines style.css + app.js (the OrcaSlicer webview ignores
         # external <link>/<script src>), so it is ~391KB of text and is served
@@ -6860,7 +6969,10 @@ class KobraXBridge:
                 await loop.run_in_executor(None, self.client.stop_print)
                 result = "ok"
             elif method == "machine.system_info":
-                result = {"system_info": {"cpu_info": {"cpu_desc": "Kobra X Bridge"}}}
+                printer_name = self._state.get("printer_name") or "Anycubic Kobra"
+                result = {"system_info": {"cpu_info": {
+                    "cpu_desc": f"{printer_name} Bridge", "model": printer_name,
+                }}}
             elif method == "server.files.list":
                 result = []
             # ── moonraker-obico passthru-Targets ──
@@ -7293,9 +7405,10 @@ async def run_bridge(args):
     printers = env_loader.list_printers()
     multi_mode = bool(printers)
     if not printers:
+        default_name = _kx_printer_display_name(args)
         printers = [{
             "id":         "1",
-            "name":       getattr(args, "printer_name", None) or "Anycubic Kobra X",
+            "name":       default_name,
             "printer_ip": args.printer_ip,
             "mqtt_port":  args.mqtt_port,
             "username":   args.username,
@@ -7321,6 +7434,33 @@ async def run_bridge(args):
             except ValueError:
                 per_args.port = 7125 + idx
 
+        discovery_error = ""
+        if per_args.printer_ip and _kx_credentials_missing(per_args):
+            log.info("[Printer %s] LAN credentials missing; discovering via /info and /ctrl", pid)
+            try:
+                creds = await _kx_fetch_credentials(per_args.printer_ip)
+                per_args.printer_ip = creds["printer_ip"]
+                per_args.username = creds["username"]
+                per_args.password = creds["password"]
+                per_args.device_id = creds["device_id"]
+                per_args.mode_id = creds["mode_id"]
+                per_args.model_id = creds["model_id"]
+                if str(p.get("name") or "").strip() in (
+                        "", "Kobra X", "Anycubic Kobra X", "Anycubic Kobra"):
+                    p["name"] = creds["model"]
+                save_credentials = getattr(env_loader, "save_discovered_credentials", None)
+                if save_credentials:
+                    section = f"printer_{pid}" if multi_mode else "connection"
+                    try:
+                        save_credentials(section, creds)
+                    except Exception as e:
+                        log.warning("[Printer %s] Credentials work in memory but could not be saved (%s)",
+                                    pid, type(e).__name__)
+                log.info("[Printer %s] LAN credentials discovered for model %s", pid, creds["model_id"])
+            except Exception as e:
+                discovery_error = _kx_discovery_error(e)
+                log.warning("[Printer %s] %s", pid, discovery_error)
+
         client = KobraXClient(
             host=per_args.printer_ip,
             port=per_args.mqtt_port,
@@ -7342,10 +7482,12 @@ async def run_bridge(args):
 
         log.info(f"[Printer {pid}] Connecting to {per_args.printer_ip}:{per_args.mqtt_port}...")
         try:
+            if discovery_error:
+                raise ConnectionError(discovery_error)
             await loop.run_in_executor(None, client.connect)
             log.info(f"[Printer {pid}] MQTT connected")
         except Exception as e:
-            err = _mqtt_error_msg(e)
+            err = discovery_error or _mqtt_error_msg(e)
             log.warning(f"[Printer {pid}] Connection failed: {err} - offline mode")
             bridge._state["print_state"] = "error"
             bridge._state["kobra_state"] = "offline"

@@ -23,6 +23,7 @@ poll_interval = 3
 verbose_http_log = 0
 
 # Supported model IDs:
+#   20028 = Anycubic Kobra 4
 #   20030 = Anycubic Kobra X
 #   20025 = Anycubic Kobra S1
 #   20029 = Anycubic Kobra S1 Max

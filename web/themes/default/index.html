@@ -35,12 +35,12 @@
   <div style="flex:1"></div>
   <div id="printer-dropdown-wrap" style="display:none;position:relative">
     <button id="printer-dropdown-btn" onclick="togglePrinterDropdown()" style="background:var(--raised);border:1px solid var(--border);border-radius:6px;padding:4px 10px;color:var(--txt);cursor:pointer;font-size:13px;display:flex;align-items:center;gap:6px">
-      <span id="h-pname">Anycubic Kobra X</span><span id="printer-dropdown-caret" style="opacity:.5">▾</span>
+      <span id="h-pname">__PRINTER_NAME__</span><span id="printer-dropdown-caret" style="opacity:.5">▾</span>
     </button>
     <div id="printer-dropdown-menu" style="display:none;position:absolute;top:calc(100% + 4px);right:0;background:var(--card);border:1px solid var(--border);border-radius:8px;min-width:200px;z-index:200;box-shadow:0 4px 16px #0006;overflow:hidden">
     </div>
   </div>
-  <div id="h-pname-single" class="hname">Anycubic Kobra X</div>
+  <div id="h-pname-single" class="hname">__PRINTER_NAME__</div>
   <span id="h-version" style="font-size:11px;opacity:.5;margin-left:6px"></span>
   <div class="hbadge" id="h-badge"><span class="dot"></span><span id="h-state">Standby</span></div>
   <button class="theme-btn" onclick="toggleTheme()">☀ / ☾</button>
@@ -768,7 +768,7 @@
       <span class="modal-title" id="store-web-verify-title">Datei verifizieren</span>
       <button onclick="closeStoreWebVerifyDialog()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--txt2)">✕</button>
     </div>
-    <p id="store-web-verify-msg" style="font-size:13px;color:var(--txt);margin-bottom:12px">Bitte bestätige, dass diese Datei für den Anycubic Kobra X erstellt wurde.</p>
+    <p id="store-web-verify-msg" style="font-size:13px;color:var(--txt);margin-bottom:12px">Bitte bestätige, dass diese Datei für den __PRINTER_NAME__ erstellt wurde.</p>
     <div id="store-web-verify-status" style="font-size:12px;color:var(--txt2);min-height:16px;margin-bottom:8px"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button id="store-web-verify-abort" onclick="closeStoreWebVerifyDialog()" style="padding:8px 16px;background:var(--raised);border:1px solid var(--border);border-radius:8px;color:var(--txt);cursor:pointer">Abbrechen</button>

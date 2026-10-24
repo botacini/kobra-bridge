@@ -35,6 +35,16 @@ class KobraModel:
 
 
 MODELS: dict[str, KobraModel] = {
+    "20028": KobraModel(
+        model_id="20028", name="Anycubic Kobra 4",
+        aliases=("kobra 4", "anycubic kobra 4"),
+        build_volume_mm=(260, 260, 260),
+        nozzle_diameters_mm=(0.25, 0.4, 0.6, 0.8),
+        max_nozzle_c=300, max_bed_c=100, max_chamber_c=0,
+        max_colors=8, max_ace_units=2, enclosed=False,
+        camera_transport="anycubic-lan", orca_profile="Anycubic Kobra 4 0.4 nozzle",
+        max_xy_speed_mm_s=600, max_xy_accel_mm_s2=20000,
+    ),
     "20030": KobraModel(
         model_id="20030", name="Anycubic Kobra X",
         aliases=("kobra x", "anycubic kobra x"),

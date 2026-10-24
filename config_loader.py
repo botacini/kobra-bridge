@@ -7,6 +7,7 @@ import os
 import sys
 import pathlib
 import configparser
+import tempfile
 from typing import Optional
 
 _BASE = pathlib.Path(sys.executable).parent if getattr(sys, "frozen", False) else pathlib.Path(__file__).parent
@@ -145,6 +146,61 @@ def find_config_path() -> pathlib.Path:
         if config_dir.is_dir():
             return config_dir / "config.ini"
     return _BASE / "config" / "config.ini"
+
+
+def save_discovered_credentials(section: str, credentials: dict) -> pathlib.Path:
+    """Persist printer-provided LAN credentials without exposing them to logs.
+
+    Existing unrelated settings are preserved.  The temporary file lives beside
+    config.ini so ``os.replace`` is atomic on the destination filesystem.
+    """
+    if section != CONFIG_SECTION_CONNECTION and not section.startswith("printer_"):
+        raise ValueError("invalid printer configuration section")
+
+    path = find_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cfg = configparser.ConfigParser()
+    if path.is_file():
+        cfg.read(path, encoding="utf-8")
+    if not cfg.has_section(section):
+        cfg.add_section(section)
+
+    values = {
+        "printer_ip": credentials.get("printer_ip"),
+        "username": credentials.get("username"),
+        "password": credentials.get("password"),
+        "device_id": credentials.get("device_id"),
+        "mode_id": credentials.get("mode_id"),
+        "model_id": credentials.get("model_id"),
+    }
+    for key, value in values.items():
+        if value is not None and str(value):
+            cfg.set(section, key, str(value))
+
+    # A legacy single-printer config often carries the old generic default.
+    # Replace only that exact default; never overwrite a user-supplied name.
+    if section == CONFIG_SECTION_CONNECTION and credentials.get("model"):
+        if not cfg.has_section(CONFIG_SECTION_BRIDGE):
+            cfg.add_section(CONFIG_SECTION_BRIDGE)
+        current_name = cfg.get(CONFIG_SECTION_BRIDGE, "printer_name", fallback="").strip()
+        if not current_name or current_name == "Anycubic Kobra X":
+            cfg.set(CONFIG_SECTION_BRIDGE, "printer_name", str(credentials["model"]))
+
+    tmp_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", newline="", delete=False,
+                dir=path.parent, prefix=".config.", suffix=".tmp") as tmp:
+            tmp_name = tmp.name
+            tmp.write("# Kobra Bridge configuration (based on KX-Bridge)\n\n")
+            cfg.write(tmp)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(tmp_name, path)
+    finally:
+        if tmp_name and os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+    return path
 
 
 # ─── Laden ───────────────────────────────────────────────────────────────────

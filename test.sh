@@ -4,6 +4,8 @@ PYTHON=${PYTHON:-python3}
 NODE=${NODE:-node}
 
 $PYTHON test_kobra_models.py
+$PYTHON test_lan_credentials.py
+$PYTHON test_printer_identity.py
 $PYTHON test_s1_info_state.py
 $PYTHON test_s1_camera_source.py
 $PYTHON test_s1_slots.py
@@ -18,6 +20,7 @@ $PYTHON test_print_pending.py
 $PYTHON test_mqtt_framing.py
 $PYTHON test_mqtt_ack_correlation.py
 $PYTHON test_upload_progress.py
+$PYTHON test_upload_confirmation.py
 $PYTHON test_log_redaction.py
 $NODE test_farm_model_compat.js
 $NODE test_file_browser_safety.js
