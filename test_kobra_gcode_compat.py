@@ -85,18 +85,20 @@ def inspect(data):
   p=pathlib.Path(d)/'fixture.gcode';p.write_bytes(data);return m.inspect_gcode(p)
 
 x=models.model_for_id('20030');k4=models.model_for_id('20028');s1=models.model_for_id('20025');smax=models.model_for_id('20029')
+f=inspect(fixture())
+assert f.source_model_id=='20030' and f.nozzle_mm==.4
 # ASN/Orca Kobra 4 may omit the start marker and repeat the "filament end"
 # comment throughout the model; only a real executable shutdown counts as end.
 native=fixture(model='Anycubic Kobra 4')
-native=native.replace(b'; filament start gcode\\n',b'')
-native=native.replace(b'; filament end gcode\\n',b'; filament end gcode\\nG1 X20 Y20\\n; filament end gcode\\n',1)
+native=native.replace(b'; filament start gcode\n',b'')
+native=native.replace(b'; filament end gcode\n',b'; filament end gcode\nG1 X20 Y20\n; filament end gcode\n',1)
 native_f=inspect(native)
 assert native_f.has_machine_start and native_f.has_machine_end,(native_f.has_machine_start,native_f.has_machine_end)
 assert native_f.bounds_max[0]>=159,native_f.bounds_max
 assert m.check_compatibility(native_f,k4,.4,4).decision=='native'
-no_shutdown=native.replace(b'M140 S0\\nM104 S0\\nM107\\nM84\\n',b'M140 S0\\nM104 S0\\nM107\\n')
+no_shutdown=native.replace(b'M140 S0\nM104 S0\nM107\nM84\n',b'M140 S0\nM104 S0\nM107\n')
 assert not inspect(no_shutdown).has_machine_end
-no_start=native.replace(b'G9111 bedTemp=60 extruderTemp=220\\n',b'')
+no_start=native.replace(b'G9111 bedTemp=60 extruderTemp=220\n',b'')
 assert not inspect(no_start).has_machine_start
 # Progress represents the two real file passes: hash 0-50%, scan 50-100%.
 with tempfile.TemporaryDirectory() as d:
@@ -166,6 +168,3 @@ with tempfile.TemporaryDirectory() as d:
  m.derive_gcode(src,x,a);out=a.read_text()
  assert 'G1 X135 Y352 F18000' not in out and 'M141 S0' not in out
  assert '; printer_model = Anycubic Kobra X' in out
-print('kobra gcode compatibility: all checks passed')f=inspect(fixture())
-assert f.source_model_id=='20030' and f.nozzle_mm==.4
-
