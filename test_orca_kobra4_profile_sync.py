@@ -73,6 +73,9 @@ with tempfile.TemporaryDirectory() as tmp:
     result = sync.install(asn, orca, dll)
 
     installed = json.loads(old.read_text(encoding="utf-8"))
+    official = user / "machine" / f"{sync.MACHINE_TARGETS[0]}.json"
+    assert official.is_file()
+    assert json.loads(official.read_text(encoding="utf-8"))["name"] == sync.MACHINE_TARGETS[0]
     assert installed["printer_model"] == "Anycubic Kobra 4"
     assert installed["inherits"] == "" and "Kobra X" not in json.dumps(installed)
     assert installed["change_filament_gcode"] == "T[next_extruder]"
@@ -83,6 +86,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert (backup / "manifest.json").is_file()
     assert len(list((user / "filament").glob("*Kobra 4*.json"))) == 1
     assert len(list((user / "process").glob("*Kobra 4*.json"))) == 1
+    assert all(name in json.loads((user / "filament" / f"{filament['name']}.json").read_text(encoding="utf-8"))["compatible_printers"] for name in sync.MACHINE_TARGETS)
     assert all((user / "machine" / "Anycubic Kobra 4 assets" / a).is_file()
                for a in sync.ASSETS)
 
