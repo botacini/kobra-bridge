@@ -85,8 +85,6 @@ def inspect(data):
   p=pathlib.Path(d)/'fixture.gcode';p.write_bytes(data);return m.inspect_gcode(p)
 
 x=models.model_for_id('20030');k4=models.model_for_id('20028');s1=models.model_for_id('20025');smax=models.model_for_id('20029')
-f=inspect(fixture())
-assert f.source_model_id=='20030' and f.nozzle_mm==.4
 # ASN/Orca Kobra 4 may omit the start marker and repeat the "filament end"
 # comment throughout the model; only a real executable shutdown counts as end.
 native=fixture(model='Anycubic Kobra 4')
@@ -168,4 +166,6 @@ with tempfile.TemporaryDirectory() as d:
  m.derive_gcode(src,x,a);out=a.read_text()
  assert 'G1 X135 Y352 F18000' not in out and 'M141 S0' not in out
  assert '; printer_model = Anycubic Kobra X' in out
-print('kobra gcode compatibility: all checks passed')
+print('kobra gcode compatibility: all checks passed')f=inspect(fixture())
+assert f.source_model_id=='20030' and f.nozzle_mm==.4
+
