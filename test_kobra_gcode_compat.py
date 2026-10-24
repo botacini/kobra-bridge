@@ -168,3 +168,4 @@ with tempfile.TemporaryDirectory() as d:
  m.derive_gcode(src,x,a);out=a.read_text()
  assert 'G1 X135 Y352 F18000' not in out and 'M141 S0' not in out
  assert '; printer_model = Anycubic Kobra X' in out
+print('kobra gcode compatibility: all checks passed')
