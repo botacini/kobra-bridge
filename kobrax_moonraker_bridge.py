@@ -61,6 +61,7 @@ from kobrax_client import KobraXClient
 from gcode_preflight import scan_bytes as preflight_bytes, scan_file as preflight_file
 from kobra_models import discover_model, model_for_id, model_for_name
 from kobra_gcode_compat import inspect_gcode, check_compatibility, derive_gcode, CONVERTER_VERSION
+from bridge_network import serve_host
 
 
 try:
@@ -5324,7 +5325,10 @@ class KobraXBridge:
     def _serve_url(self, file_path: str) -> str:
         host = getattr(self, "_local_ip", "")
         if not host or host in ("localhost", "127.0.0.1", "0.0.0.0"):
-            raise RuntimeError("BRIDGE_HOST_IP must be the bridge LAN address")
+            raise RuntimeError(
+                "No usable LAN IP for this printer; check printer network and "
+                "bridge bind address (use --host 0.0.0.0)"
+            )
         return f"http://{host}:{self._args.port}/serve/{quote(os.path.basename(file_path))}"
 
     def _reset_skip_state(self, excluded_objects: list | None = None):
@@ -7505,28 +7509,22 @@ async def run_bridge(args):
         await site.start()
         runners.append((runner, client, pid))
 
-    import socket as _socket
-    _in_docker = os.path.exists("/.dockerenv")
-    _host_ip_override = env_loader.BRIDGE_HOST_IP.strip()
-    if _host_ip_override:
-        _local_ip = _host_ip_override
-    else:
+    # Each printer may be reached through a different LAN interface.
+    # Route detection uses its configured printer IP, not a public internet
+    # destination (which can pick a VPN/Tailscale or an unrelated adapter).
+    for _pid, _bridge in all_bridges.items():
         try:
-            with _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM) as _s:
-                _s.connect(("8.8.8.8", 80))
-                _local_ip = _s.getsockname()[0]
-        except Exception:
-            _local_ip = args.host
-    # Propagate to all bridge instances - used for absolute webcam URLs
-    for _b in all_bridges.values():
-        _b._local_ip = _local_ip
+            _bridge._local_ip = serve_host(
+                _bridge._args.printer_ip, args.host,
+                env_loader.BRIDGE_HOST_IP.strip())
+            log.info("[Printer %s] LAN file URL: http://%s:%s/serve/...",
+                     _pid, _bridge._local_ip, _bridge._args.port)
+        except RuntimeError as exc:
+            _bridge._local_ip = ""
+            log.warning("[Printer %s] LAN file serving unavailable: %s",
+                        _pid, exc)
     ports = ", ".join(str(getattr(b._args, 'port', 0)) for b in all_bridges.values())
-    if _in_docker and not _host_ip_override:
-        # In a container the UDP trick only yields the Docker-internal IP - don't show it
-        log.info(f"OrcaSlicer → Klipper → http://<IP of this Docker host>:{ports}")
-        log.info("Running in Docker — set BRIDGE_HOST_IP to show the exact address")
-    else:
-        log.info(f"OrcaSlicer → Klipper → http://{_local_ip}:{ports}")
+    log.info("OrcaSlicer → Klipper → listening at %s:%s", args.host, ports)
     log.info("Press Ctrl-C to stop")
 
     try:
