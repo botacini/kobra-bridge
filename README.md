@@ -38,6 +38,24 @@ It blocks unknown models, ambiguous motion, out-of-volume geometry, nozzle/tempe
 - LAN mode enabled on each printer
 - Anycubic slicer TLS client certificate/key (not distributed here; see [docs/CERTIFICATES.md](docs/CERTIFICATES.md))
 
+## Windows quick start (Kobra 4 / Kobra X / S1 / S1 Max)
+
+1. Install [Python 3.11 or later](https://www.python.org/downloads/windows/). Git is optional: either download this branch as a ZIP from GitHub and extract it, or clone it with:
+   ```powershell
+   git clone -b feature/kobra4-support https://github.com/botacini/kobra-bridge.git
+   ```
+2. Open the extracted `kobra-bridge` folder and double-click **`install.bat`**. This creates a local `.venv`, installs `requirements.txt`, and creates `config/config.ini` if absent. It does **not** overwrite an existing configuration.
+3. Download `anycubic-certs.zip` from the [upstream KX-Bridge releases](https://gitea.it-drui.de/viewit/KX-Bridge-Release/releases) and extract `anycubic_slicer.crt` and `anycubic_slicer.key` into `certs/`. These TLS credentials are required and cannot be bundled with the project.
+4. Enable **LAN mode** on the printer. The Windows PC and printer must be on the same trusted local network.
+5. Double-click **`start.bat`**; keep its terminal window open. In a browser open **http://localhost:7125**, select **Add printer**, and enter the printer's LAN IPv4 address. The bridge performs local signed `/info` → `/ctrl` discovery to retrieve the printer's connection credentials automatically.
+6. In OrcaSlicer, select **Moonraker** as the printer network connection and set the host to `http://localhost:7125`. If OrcaSlicer runs on a different machine, substitute the Windows bridge PC's LAN address (and allow TCP port 7125 through its firewall if needed).
+
+**Anycubic Slicer Next (ASN) login:** **not required by Kobra Bridge**. The local discovery does not access the Anycubic cloud account. If LAN mode setup on a particular printer/firmware asks for the official app or account, complete that device-specific setup first; it is separate from bridge authentication.
+
+**Networking:** The bridge normally detects the PC's LAN address from the route to the printer when preparing print requests. Do not set `BRIDGE_HOST_IP` for typical installations; it is an optional override for unusual network configurations. Cloud functions in the official Anycubic app are independent from this local bridge, subject to the printer firmware's LAN/cloud mode behavior.
+
+**Troubleshooting:** If the dashboard cannot add the printer, verify its IP, LAN mode, host firewall and that port 18910 is reachable. If MQTT authentication fails, confirm both TLS files are present in `certs/`. On Windows, run the scripts from an extracted local directory, not from inside a ZIP. `start.bat` must remain running to use OrcaSlicer/Mobileraker.
+
 ## Quick start (Docker)
 
 ```sh
