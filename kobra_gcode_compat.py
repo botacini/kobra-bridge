@@ -163,6 +163,23 @@ def inspect_gcode(path: str | os.PathLike, progress_cb=None) -> GCodeFacts:
     tools: set[int] = set()
     max_feed = max_accel = max_nozzle = max_bed = max_chamber = 0.0
     has_start = has_end = False
+    # Detect native Kobra 4 before parsing executable blocks: Orca/ASN may
+    # repeat "; filament end gcode" at every tool/layer transition.
+    with open(path, "rb") as meta_fh:
+        meta_fh.seek(max(0, size - 1_000_000))
+        tail_settings = {}
+        for meta_raw in meta_fh:
+            match = _SETTING.match(meta_raw.decode("utf-8", "replace").strip())
+            if match:
+                tail_settings[match.group(1)] = match.group(2)
+    declared = model_for_name(tail_settings.get("printer_model") or
+                              tail_settings.get("printer_settings_id"))
+    native_kobra4 = bool(declared and declared.model_id == "20028")
+    in_executable = False
+    exec_closed = False
+    start_command_seen = False
+    shutdown_state = 0
+    shutdown_complete = False
     done = 0
     if progress_cb:
         progress_cb(0, total_work, "hashing")
@@ -203,12 +220,18 @@ def inspect_gcode(path: str | os.PathLike, progress_cb=None) -> GCodeFacts:
                 sm = _SETTING.match(line)
                 if sm:
                     settings[sm.group(1)] = sm.group(2)
+                elif line == "; EXECUTABLE_BLOCK_START":
+                    in_executable = True
+                elif line == "; EXECUTABLE_BLOCK_END":
+                    exec_closed = True
+                    in_executable = False
                 elif line == "; filament start gcode":
                     has_start = True
                     body = True
                 elif line == "; filament end gcode":
-                    has_end = True
-                    end = True
+                    if not native_kobra4:
+                        has_end = True
+                        end = True
                 elif line.lstrip("; ") == "PURGE LINE":
                     purge_region = True
                 elif _AFTER_FIRST_LAYER.match(line):
@@ -232,6 +255,21 @@ def inspect_gcode(path: str | os.PathLike, progress_cb=None) -> GCodeFacts:
             if not code:
                 continue
             upper = code.upper()
+            # Native Kobra 4 emits G9111 and an ordered shutdown, rather than
+            # necessarily emitting the slicer-specific "filament start" marker.
+            # Only uncommented executable commands count.
+            if native_kobra4 and in_executable:
+                if upper.startswith("G9111 ") and not body and not start_command_seen:
+                    start_command_seen = True
+                if upper.startswith("M140 S0"):
+                    shutdown_state = 1
+                elif upper.startswith("M104 S0") and shutdown_state == 1:
+                    shutdown_state = 2
+                elif upper.startswith("M84") and shutdown_state == 2:
+                    shutdown_complete = True
+                    shutdown_state = 3
+                elif shutdown_state in (1, 2) and not upper.startswith(("M107", "M400")):
+                    shutdown_state = 0
             if upper == "G90":
                 absolute = True
             elif upper == "G91":
@@ -314,6 +352,9 @@ def inspect_gcode(path: str | os.PathLike, progress_cb=None) -> GCodeFacts:
                         track(axis, float(match.group(1)))
 
     source = model_for_name(settings.get("printer_model") or settings.get("printer_settings_id"))
+    if native_kobra4 and source and source.model_id == "20028":
+        has_start = has_start or (start_command_seen and exec_closed)
+        has_end = shutdown_complete and exec_closed
     nozzle = _max_setting(settings, ("nozzle_diameter",))
     max_nozzle = max(max_nozzle, _max_setting(settings, ("nozzle_temperature", "nozzle_temperature_initial_layer")))
     max_bed = max(max_bed, _max_setting(settings, ("hot_plate_temp", "hot_plate_temp_initial_layer", "textured_plate_temp", "textured_plate_temp_initial_layer")))
