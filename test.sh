@@ -6,10 +6,12 @@ NODE=${NODE:-node}
 $PYTHON test_kobra_models.py
 $PYTHON test_lan_credentials.py
 $PYTHON test_printer_identity.py
+$PYTHON test_orca_kobra4_profile_sync.py
 $PYTHON test_s1_info_state.py
 $PYTHON test_s1_camera_source.py
 $PYTHON test_s1_slots.py
 $PYTHON test_kobra_gcode_compat.py
+$PYTHON test_gcode_preflight_models.py
 $PYTHON test_target_file_preparation.py
 $PYTHON test_fork_update_safety.py
 $PYTHON test_cors_policy.py

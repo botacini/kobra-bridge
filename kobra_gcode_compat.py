@@ -85,6 +85,15 @@ class DerivationResult:
 
 
 _MACHINE = {
+    # Anycubic Slicer Next 1.3.9.4 official 0.4 mm profile
+    # (resources/profiles/Anycubic/machine/Anycubic Kobra 4 0.4 nozzle.json).
+    "20028": {
+        "start": "G9111 bedTemp={bed:g} extruderTemp={nozzle:g}\nM117\n",
+        "purge": "",
+        "end": "M400\nM140 S0 ; turn off heatbed\nM104 S0 ; turn off temperature\nM107;turn off fan\nM84; disable motors\n; disable stepper motors\n",
+        "pause": "M600", "structure": "i3", "disable_m73": "0",
+        "clearance": (250, 30, 60),
+    },
     "20030": {
         "start": "G9111 bedTemp={bed:g} extruderTemp={nozzle:g}\nM117\n",
         "purge": "",

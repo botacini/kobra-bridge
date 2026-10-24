@@ -81,22 +81,22 @@ M73 P100 R0
 '''.encode()
 
 def inspect(data):
- with tempfile.NamedTemporaryFile(suffix='.gcode') as f:
-  f.write(data);f.flush();return m.inspect_gcode(f.name)
+ with tempfile.TemporaryDirectory() as d:
+  p=pathlib.Path(d)/'fixture.gcode';p.write_bytes(data);return m.inspect_gcode(p)
 
-x=models.model_for_id('20030');s1=models.model_for_id('20025');smax=models.model_for_id('20029')
+x=models.model_for_id('20030');k4=models.model_for_id('20028');s1=models.model_for_id('20025');smax=models.model_for_id('20029')
 f=inspect(fixture())
 assert f.source_model_id=='20030' and f.nozzle_mm==.4
 # Progress represents the two real file passes: hash 0-50%, scan 50-100%.
-with tempfile.NamedTemporaryFile(suffix='.gcode') as pf:
- pf.write(fixture());pf.flush();progress=[]
- m.inspect_gcode(pf.name,lambda done,total,stage:progress.append((done,total,stage)))
+with tempfile.TemporaryDirectory() as d:
+ pf=pathlib.Path(d)/'progress.gcode';pf.write_bytes(fixture());progress=[]
+ m.inspect_gcode(pf,lambda done,total,stage:progress.append((done,total,stage)))
  assert progress and progress[-1][0]==progress[-1][1] and progress[-1][2]=='scanning',progress[-3:]
  assert any(stage=='hashing' for _,_,stage in progress) and any(stage=='scanning' for _,_,stage in progress)
  assert all(a[0]<=b[0] and a[1]==b[1] for a,b in zip(progress,progress[1:])),progress
 assert f.bounds_min==(10.,10.,0.) and f.bounds_max==(159.,154.,27.),(f.bounds_min,f.bounds_max)
 assert (f.max_nozzle_c,f.max_bed_c,f.max_chamber_c)==(220,60,0)
-for target in (x,s1,smax):
+for target in (x,k4,s1,smax):
  r=m.check_compatibility(f,target,.4,4);assert r.decision in ('native','convertible'),(target,r)
 assert m.check_compatibility(inspect(fixture(maxx=255,maxy=255)),s1,.4,4).decision=='blocked'
 assert m.check_compatibility(inspect(fixture(model='Anycubic Kobra S1 Max',size=350,maxx=300,maxy=300)),x,.4,4).decision=='blocked'
@@ -142,6 +142,13 @@ with tempfile.TemporaryDirectory() as d:
  assert 'filament_colour_type' not in outx,'S1-family derived files must not carry filament_colour_type'
  m.derive_gcode(src,x,b);assert 'filament_colour_type' in b.read_text(),'Kobra X target keeps the key (its parser accepts it)'
  src.write_bytes(raw)
+ # Kobra 4 has its own official machine table; mono conversion must not raise
+ # KeyError('20028') and must use Kobra 4 metadata/end code.
+ m.derive_gcode(src,k4,a);out4=a.read_text()
+ assert '; KOBRA_BRIDGE_DERIVED target_model_id=20028' in out4
+ assert '; printer_model = Anycubic Kobra 4' in out4
+ assert '; printer_settings_id = Anycubic Kobra 4 0.4 nozzle' in out4
+ assert 'M107;turn off fan' in out4
  # Reverse conversion strips Max purge/chamber end code and uses X metadata.
  src.write_bytes(fixture(model='Anycubic Kobra S1 Max',size=350,maxx=159,maxy=154,maxz=27))
  r=m.check_compatibility(m.inspect_gcode(src),x,.4,4);assert r.decision=='convertible',r

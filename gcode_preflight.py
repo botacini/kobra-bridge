@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (C) 2026 Kobra Bridge contributors
 # SPDX-License-Identifier: GPL-3.0-only
-"""Reject G-code known to starve the Kobra X GoKlipper host.
+"""Identify G-code patterns known to starve supported GoKlipper hosts.
 
 The gate is intentionally profile-aware. File size alone is useless: a 168 MB
 straight-line file can be easier than a 25 MB Arachne/support file. Orca writes
@@ -14,6 +14,8 @@ import io
 import re
 from collections import Counter
 from pathlib import Path
+
+from kobra_models import model_for_name
 
 SETTING_RE = re.compile(rb"^;\s*([a-z_0-9]+)\s*=\s*(.*?)\s*$", re.M)
 TIME_RE = re.compile(rb";\s*estimated printing time \(normal mode\)\s*=\s*([^\r\n]+)", re.I)
@@ -28,6 +30,23 @@ LIMITS = {
     "internal_solid_infill_acceleration": (7500.0, "max"),
     "max_volumetric_extrusion_rate_slope": (0.0, "max"),
 }
+
+# Kobra X limits above came from its official profile and crash reproductions.
+# Kobra 4's official ASN 1.3.9.4 profiles intentionally use resolution=0.012
+# and emit SET_VELOCITY_LIMIT at feature boundaries. The per-hour churn gate is
+# therefore not evidence of overload on model 20028; the global 120 commands/s
+# gate remains in force and catches actual parser starvation independently.
+MODEL_LIMIT_OVERRIDES = {
+    "20028": {"resolution": (0.012, "min")},
+}
+MODEL_VELOCITY_LIMIT_PER_HOUR = {
+    "20028": None,
+}
+
+
+def _source_model_id(settings: dict[str, str]) -> str:
+    model = model_for_name(settings.get("printer_model") or settings.get("printer_settings_id"))
+    return model.model_id if model else ""
 
 
 def _duration_seconds(raw: str) -> int:
@@ -66,6 +85,9 @@ def _scan_lines(lines) -> tuple[Counter, int, list[str]]:
 def _analyse(settings: dict[str, str], counts: Counter, total: int,
              duration: int, filename: str, size: int, objects: list[str] = ()) -> dict:
     reasons: list[str] = []
+    source_model_id = _source_model_id(settings)
+    limits = dict(LIMITS)
+    limits.update(MODEL_LIMIT_OVERRIDES.get(source_model_id, {}))
 
     if settings.get("wall_generator", "").lower() == "arachne":
         reasons.append("wall_generator=arachne creates dense variable-width segments")
@@ -74,7 +96,7 @@ def _analyse(settings: dict[str, str], counts: Counter, total: int,
     if settings.get("accel_to_decel_enable") == "0":
         reasons.append("accel_to_decel_enable=0 removes the official Kobra X short-move margin")
 
-    for key, (limit, direction) in LIMITS.items():
+    for key, (limit, direction) in limits.items():
         raw = settings.get(key)
         if raw is None:
             continue
@@ -105,12 +127,15 @@ def _analyse(settings: dict[str, str], counts: Counter, total: int,
         reasons.append(f"average command rate {cmd_s:.1f}/s exceeds 120/s")
     if duration and fan_h > 1200:
         reasons.append(f"M106 rate {fan_h:.0f}/hour exceeds 1200/hour")
-    if duration and velocity_h > 6000:
-        reasons.append(f"SET_VELOCITY_LIMIT rate {velocity_h:.0f}/hour exceeds 6000/hour")
+    velocity_limit = MODEL_VELOCITY_LIMIT_PER_HOUR.get(source_model_id, 6000)
+    if duration and velocity_limit is not None and velocity_h > velocity_limit:
+        reasons.append(
+            f"SET_VELOCITY_LIMIT rate {velocity_h:.0f}/hour exceeds {velocity_limit}/hour")
 
     return {
         "safe": not reasons,
         "filename": filename,
+        "source_model_id": source_model_id,
         "size_bytes": size,
         "estimated_seconds": duration,
         "commands": total,
