@@ -5036,46 +5036,44 @@ class KobraXBridge:
             })
         return web.json_response({"result": {"count": len(result_jobs), "jobs": result_jobs}})
 
-    async def handle_webcams_list(self, request):
-        """Moonraker /server/webcams/list - Obico fetches the webcam URLs here.
+    def _moonraker_webcams(self, base: str) -> list[dict]:
+        """Moonraker-compatible webcam entries shared by HTTP and JSON-RPC.
 
-        When the client comes from another host (e.g. moonraker-obico on a
-        separate server), it needs absolute URLs to reach the stream.
-        A Host header with localhost/127.0.0.1 is replaced by the real LAN IP."""
-        host_hdr = request.headers.get("Host", "") if request else ""
-        host_name = (host_hdr or "").split(":")[0]
-        port_part = f":{host_hdr.split(':')[1]}" if ":" in (host_hdr or "") else f":{self._args.port}"
-        local_ip  = getattr(self, "_local_ip", None) or host_name
-        if host_name in ("localhost", "127.0.0.1", ""):
-            host_name = local_ip
-        base         = f"http://{host_name}{port_part}"
-        stream_url   = f"{base}/api/camera/stream"
-        snapshot_url = f"{base}/api/camera/snapshot"
+        A stable uid and source are required by clients which persist or
+        reconcile webcam settings (notably mobile Moonraker frontends).
+        """
         if not CAMERA_ENABLED:
-            # Advertise no webcam at all, otherwise Moonraker clients (OrcaSlicer,
-            # Mainsail, mobile apps) keep opening the stream endpoint.
-            return web.json_response({"result": {"webcams": []}})
+            return []
+        return [{
+            "name": "Kobra Bridge",
+            "location": "printer",
+            "service": "mjpegstreamer",
+            "enabled": True,
+            "icon": "mdiWebcam",
+            "target_fps": 5,
+            "target_fps_idle": 2,
+            "stream_url": f"{base}/api/camera/stream",
+            "snapshot_url": f"{base}/api/camera/snapshot",
+            "flip_horizontal": False,
+            "flip_vertical": False,
+            "rotation": 0,
+            "aspect_ratio": "16:9",
+            "extra_data": {},
+            "source": "config",
+            "uid": "e7dca6d2-3614-5470-90fa-5b0d8d61b504",
+        }]
+
+    async def handle_webcams_list(self, request):
+        """Moonraker webcam discovery with the full, stable entry schema."""
+        # Use the request host for clients on LAN or Tailscale, preserving
+        # the externally visible port instead of assuming TCP/80.
+        host_hdr = request.headers.get("Host", "") if request else ""
+        if not host_hdr or host_hdr.startswith(("localhost", "127.0.0.1")):
+            host_hdr = f"{getattr(self, '_local_ip', '') or '127.0.0.1'}:{self._args.port}"
+        if ":" not in host_hdr:
+            host_hdr = f"{host_hdr}:{self._args.port}"
         return web.json_response({
-            "result": {
-                "webcams": [
-                    {
-                        "name":         "Kobra Bridge",
-                        "location":     "printer",
-                        "service":      "mjpegstreamer",
-                        "enabled":      True,
-                        "icon":         "mdiWebcam",
-                        "target_fps":   5,
-                        "target_fps_idle": 2,
-                        "stream_url":   stream_url,
-                        "snapshot_url": snapshot_url,
-                        "flip_horizontal": False,
-                        "flip_vertical":   False,
-                        "rotation":     0,
-                        "aspect_ratio": "16:9",
-                        "extra_data":   {},
-                    }
-                ]
-            }
+            "result": {"webcams": self._moonraker_webcams(f"http://{host_hdr}")}
         })
 
     async def handle_file_upload(self, request):
@@ -6990,17 +6988,11 @@ class KobraXBridge:
                 # Obico registriert obico_remote_event-Callback. Wir akzeptieren leer.
                 result = "ok"
             elif method == "server.webcams.list":
-                # WS variant: absolute URL with the real LAN IP instead of localhost
+                # Match the HTTP endpoint exactly; stable uid/source let clients
+                # reconcile camera entries across reconnects.
                 _lip = getattr(self, "_local_ip", None) or "127.0.0.1"
-                _base = f"http://{_lip}:{self._args.port}"
-                result = {"webcams": [{
-                    "name": "Kobra Bridge", "location": "printer", "service": "mjpegstreamer",
-                    "enabled": True,
-                    "stream_url":   f"{_base}/api/camera/stream",
-                    "snapshot_url": f"{_base}/api/camera/snapshot",
-                    "flip_horizontal": False, "flip_vertical": False, "rotation": 0,
-                    "target_fps": 5, "aspect_ratio": "16:9",
-                }]}
+                result = {"webcams": self._moonraker_webcams(
+                    f"http://{_lip}:{self._args.port}")}
             elif method == "server.history.list":
                 # Reuse the HTTP handler logic (Moonraker schema with Unix TS).
                 try:
